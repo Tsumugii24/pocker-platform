@@ -1,0 +1,133 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+}
+
+:root {
+  /* Pure black minimalist poker theme */
+  --background: oklch(0 0 0); /* Pure black */
+  --foreground: oklch(1 0 0); /* Pure white */
+  
+  --card: oklch(0.1 0 0); /* Very dark gray for cards */
+  --card-foreground: oklch(1 0 0);
+  
+  --popover: oklch(0.05 0 0); /* Darker gray for popovers */
+  --popover-foreground: oklch(1 0 0);
+  
+  --primary: oklch(0.7 0.15 160); /* Green #00d084 */
+  --primary-foreground: oklch(0 0 0);
+  
+  --secondary: oklch(0.15 0 0); /* Dark gray */
+  --secondary-foreground: oklch(0.6 0 0);
+  
+  --muted: oklch(0.2 0 0); /* Medium dark gray */
+  --muted-foreground: oklch(0.6 0 0); /* Gray text */
+  
+  --accent: oklch(0.7 0.15 160); /* Green accent */
+  --accent-foreground: oklch(0 0 0);
+  
+  --destructive: oklch(0.6 0.2 25); /* Red #d04040 */
+  --destructive-foreground: oklch(1 0 0);
+  
+  --border: oklch(0.2 0 0); /* #333333 */
+  --input: oklch(0.15 0 0);
+  --ring: oklch(0.7 0.15 160);
+  
+  --radius: 8px;
+  
+  /* Custom poker colors */
+  --poker-green: oklch(0.7 0.15 160); /* #00d084 */
+  --poker-orange: oklch(0.7 0.15 50); /* #ff8c00 */
+  --poker-red: oklch(0.6 0.2 25); /* #d04040 */
+  --poker-gray: oklch(0.4 0 0); /* #666666 */
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [type="button"]:not(:disabled),
+  [type="submit"]:not(:disabled),
+  [type="reset"]:not(:disabled),
+  a[href],
+  select:not(:disabled),
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled) {
+    @apply cursor-pointer;
+  }
+}
+
+@layer components {
+  .container {
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .flex {
+    min-height: 0;
+    min-width: 0;
+  }
+
+  @media (min-width: 640px) {
+    .container {
+      padding-left: 1.5rem;
+      padding-right: 1.5rem;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .container {
+      padding-left: 2rem;
+      padding-right: 2rem;
+      max-width: 1280px;
+    }
+  }
+  
+  /* Poker specific utilities */
+  .poker-table-border {
+    border: 1px solid oklch(0.2 0 0);
+  }
+  
+  .poker-position-circle {
+    @apply rounded-full border-2 flex items-center justify-center;
+  }
+  
+  .poker-card {
+    @apply rounded-lg bg-white text-black flex items-center justify-center font-bold;
+  }
+}
