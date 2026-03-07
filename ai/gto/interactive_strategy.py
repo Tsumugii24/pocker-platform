@@ -248,11 +248,13 @@ def _export_turn_config_at_flop_end(
     dump_name = out_name.replace(".txt", ".json")
     new_lines.append(f"dump_result {dump_name}\n")
 
+    is_new = not out_path.exists()
     with open(out_path, "w", encoding="utf-8") as f:
         f.writelines(new_lines)
 
-    print(f"[FLOP→TURN] 已生成 turn 配置: {out_path}")
-    print(f"  Pot={pot:.0f}, EffectiveStack={eff_stack:.0f}, Board={new_board}")
+    if is_new:
+        print(f"[FLOP→TURN] 已生成 turn 配置: {out_path}")
+        print(f"  Pot={pot:.0f}, EffectiveStack={eff_stack:.0f}, Board={new_board}")
     return (out_path, dump_name)
 
 
@@ -326,11 +328,13 @@ def _export_river_config_at_turn_end(
     dump_name = out_name.replace(".txt", ".json")
     new_lines.append(f"dump_result {dump_name}\n")
 
+    is_new = not out_path.exists()
     with open(out_path, "w", encoding="utf-8") as f:
         f.writelines(new_lines)
 
-    print(f"[TURN→RIVER] 已生成 river 配置: {out_path}")
-    print(f"  Pot={pot:.0f}, EffectiveStack={eff_stack:.0f}, Board={new_board}")
+    if is_new:
+        print(f"[TURN→RIVER] 已生成 river 配置: {out_path}")
+        print(f"  Pot={pot:.0f}, EffectiveStack={eff_stack:.0f}, Board={new_board}")
     return (out_path, dump_name)
 
 
@@ -656,7 +660,7 @@ def main() -> None:
         if data_path.suffix.lower() == ".parquet":
             print(f"文件不存在，尝试从 HuggingFace 下载: {data_path.stem}")
             try:
-                from upload.download_from_hf import download_board_from_hf
+                from download_from_hf import download_board_from_hf
                 cache_dir = str(data_path.parent) if data_path.parent != Path(".") else "cache"
                 downloaded = download_board_from_hf(data_path.stem, cache_dir=cache_dir)
                 if downloaded and downloaded.exists():

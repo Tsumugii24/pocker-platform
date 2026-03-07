@@ -88,7 +88,16 @@ export function CustomHandDialog({
                         return (
                             <div
                                 key={idx}
-                                onClick={() => setActiveSlot(idx)}
+                                onClick={() => {
+                                    if (card) {
+                                        const newSlots = [...slots];
+                                        newSlots[idx] = null;
+                                        setSlots(newSlots);
+                                        setActiveSlot(idx);
+                                    } else {
+                                        setActiveSlot(idx);
+                                    }
+                                }}
                                 className={cn(
                                     "w-12 h-16 rounded-md border-2 cursor-pointer flex items-center justify-center bg-[#1a1a1a] transition-all",
                                     isActive ? "border-[#00d084] shadow-[0_0_10px_rgba(0,208,132,0.3)]" : "border-[#333333] hover:border-gray-500",
@@ -131,7 +140,7 @@ export function CustomHandDialog({
 
                     {/* Deck Picker */}
                     <div className="space-y-2">
-                        <h3 className="text-sm font-medium text-gray-400 mb-4 text-center">
+                        <h3 className="text-sm font-medium text-gray-400 mb-4 text-center tabular-nums">
                             选择一张牌 (剩余: {52 - slots.filter(Boolean).length})
                         </h3>
                         <div className="grid grid-rows-4 gap-1.5 justify-center">
@@ -184,7 +193,7 @@ export function CustomHandDialog({
                             onClick={handleConfirm}
                             disabled={!isComplete}
                             className={cn(
-                                "font-semibold text-black",
+                                "font-semibold text-black tabular-nums min-w-[140px]",
                                 isComplete ? "bg-[#00d084] hover:bg-[#00d084]/90" : "bg-gray-600 text-gray-400"
                             )}
                         >

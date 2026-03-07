@@ -53,9 +53,25 @@ def get_action():
     # Format the board string into standard flop file name, e.g. Ac,Ad,Ah -> AcAdAh
     flop_board = "".join(board_str.split(',')[:3])
     data_file = str(gto_dir / f"cache/{flop_board}.parquet")
-    
+    data_path = Path(data_file)
+
+    # Parquet 不存在时尝试从 HuggingFace 自动下载
+    if not data_path.exists():
+        try:
+            from download_from_hf import download_board_from_hf
+            cache_dir = str(gto_dir / "cache")
+            downloaded = download_board_from_hf(flop_board, cache_dir=cache_dir)
+            if downloaded and downloaded.exists():
+                data_file = str(downloaded)
+                data_path = downloaded
+                print(f"[API Info] 已从 HuggingFace 下载: {downloaded.name}")
+            else:
+                return jsonify({"error": f"Parquet 不存在且下载失败: {flop_board}"}), 404
+        except ImportError:
+            return jsonify({"error": f"Parquet 不存在: {flop_board}（需 pip install huggingface_hub 以支持自动下载）"}), 404
+
     try:
-        from query_action_line import ActionLineQuery, _auto_detect_config, _load_data, _expand_range_to_hands
+        from query_action_line import ActionLineQuery, _auto_detect_config, _load_data, _load_json_with_retry, _expand_range_to_hands
         from parse_solver_result import parse_config
         from interactive_strategy import (
             _match_action, _pick_hand_from_strategy, _get_probs_for_hand, 
@@ -83,6 +99,9 @@ def get_action():
         global current_querier_cache
         if current_querier_cache['board'] == flop_board and current_querier_cache['querier'] is not None:
             querier = current_querier_cache['querier']
+            # 每次请求必须从 flop 树开始 replay，否则上次加载的 turn/river 会污染 querier.data
+            querier.data = _load_data(Path(data_file))
+            querier.data_path = Path(data_file)
             querier.config_path = Path(config_path)
             config_data = parse_config(str(config_path))
             board_list = [c.strip() for c in (config_data.get('board', '')).split(',') if c.strip()]
@@ -162,6 +181,7 @@ def get_action():
                         
                         import time
                         wait_start = time.time()
+                        waiting_logged = False
                         while not t_json.exists() and (time.time() - wait_start < 60):
                              with solve_lock:
                                  if not t_json.exists() and dump_n not in currently_solving:
@@ -178,14 +198,15 @@ def get_action():
                                      run_solver(str(Path(cfg_p).resolve()), output_dir=str(SCRIPT_DIR / "cache" / "results"))
                                  finally:
                                      with solve_lock: currently_solving.discard(dump_n)
-                                 break 
+                                 break
                              else:
-                                 if time.time() - wait_start < 1.0:
+                                 if not waiting_logged:
                                      print(f"[API Info] Waiting for ongoing TURN solver ({dump_n})...")
+                                     waiting_logged = True
                                  time.sleep(1)
 
                         if t_json.exists():
-                            turn_data = _load_data(t_json)
+                            turn_data = _load_json_with_retry(t_json)
                             if not turn_data: break
                             querier.data = turn_data
                             querier.data_path = Path(t_json)
@@ -200,16 +221,19 @@ def get_action():
                             board_count = 4
                             next_node = turn_data
 
-                elif is_turn_to_river and next_node and next_node.get('node_type') != 'terminal':
-                    river_ranges = next_node.get('ranges', {})
+                elif is_turn_to_river and (not next_node or next_node.get('node_type') != 'terminal'):
+                    # next_node 可能为 None（turn 树未展开该 river 牌），用 current range 跑 river solver
+                    river_ranges = (next_node or {}).get('ranges', {})
                     path_turn = step_path_so_far
-                    res_cfg = _export_river_config_at_turn_end(querier, path_turn, next_node, card, river_ranges.get('oop_range') or current_oop_range, river_ranges.get('ip_range') or current_ip_range)
+                    river_node = next_node or {"node_type": "action_node", "ranges": {"oop_range": current_oop_range, "ip_range": current_ip_range}}
+                    res_cfg = _export_river_config_at_turn_end(querier, path_turn, river_node, card, river_ranges.get('oop_range') or current_oop_range, river_ranges.get('ip_range') or current_ip_range)
                     if res_cfg:
                         cfg_p, dump_n = res_cfg
                         r_json = SCRIPT_DIR / "cache" / "results" / dump_n
                         
                         import time
                         wait_start = time.time()
+                        waiting_logged = False
                         while not r_json.exists() and (time.time() - wait_start < 60):
                              with solve_lock:
                                  if not r_json.exists() and dump_n not in currently_solving:
@@ -228,12 +252,13 @@ def get_action():
                                      with solve_lock: currently_solving.discard(dump_n)
                                  break
                              else:
-                                 if time.time() - wait_start < 1.0:
+                                 if not waiting_logged:
                                      print(f"[API Info] Waiting for ongoing RIVER solver ({dump_n})...")
+                                     waiting_logged = True
                                  time.sleep(1)
 
                         if r_json.exists():
-                            river_data = _load_data(r_json)
+                            river_data = _load_json_with_retry(r_json)
                             if not river_data: break
                             querier.data = river_data
                             querier.data_path = Path(r_json)
@@ -273,8 +298,24 @@ def get_action():
                 query_parts.append(f"[{matched}]")
         query_path_str = "ROOT -> " + (" -> ".join(query_parts) if query_parts else "(empty)")
 
-        # If this is a pre-solve request, print summary and return early
+        # 与 interactive_strategy 一致：最后一步为 action 且导致无子节点 = 到达叶子（对局结束）
         if not current_node:
+            last_actual = resolved_actions[-1][0] if resolved_actions else ""
+            if resolved_actions and not last_actual.upper().startswith("DEAL"):
+                # 最后一步是 action（如 CALL）导致无子节点，视为正常对局结束
+                print("\n" + "=" * 60)
+                print(f"Actual Path: {actual_path_str}")
+                print(f"Query Path:  {query_path_str}")
+                print(f"Remaining:   {final_remaining_stack:.2f} BB")
+                print("=" * 60)
+                print("[API Debug] 对局结束 (Leaf). Returning success.")
+                return jsonify({
+                    "status": "complete",
+                    "node_type": "terminal",
+                    "leaf": True,
+                    "reason": "no further child node",
+                    "pre_solve": True
+                }), 200
             print(f"[API Error] Replay failed: Final node is None.")
             return jsonify({"error": "Path replay reached a missing node"}), 404
 

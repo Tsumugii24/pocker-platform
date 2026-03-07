@@ -41,6 +41,26 @@ def _load_data(path: Path) -> Dict[str, Any]:
             return json.load(f)
 
 
+def _load_json_with_retry(path: Path, max_retries: int = 10, retry_delay: float = 2.0) -> Dict[str, Any]:
+    """
+    加载 solver 输出的 JSON，在文件可能仍在写入时重试。
+    用于解决多请求并发时，solver 尚未写完即被读取导致的 JSONDecodeError。
+    """
+    path = Path(path)
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except json.JSONDecodeError as e:
+            last_err = e
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(retry_delay)
+            else:
+                raise last_err
+
+
 def calc_pot_along_path(path_actions: List[str], initial_pot: float, effective_stack: float) -> Tuple[float, float, float]:
     """
     沿着 action line 计算当前底池大小和双方已投入筹码

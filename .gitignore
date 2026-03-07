@@ -41,3 +41,19 @@ temp/
 # Testing
 coverage/
 .nyc_output
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+env/
+*.egg-info/
+*.egg
+.eggs/
+.mypy_cache/
+.pytest_cache/

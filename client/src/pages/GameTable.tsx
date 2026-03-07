@@ -690,6 +690,8 @@ export default function GameTable() {
 
   const latestTablesRef = useRef(tables);
   const prevStreetsRef = useRef<string[]>([]);
+  /** 用于传给 processOpponentAction 的完整 table，避免 setState 异步导致 path 不完整 */
+  const pendingOpponentTableRef = useRef<{ tableIndex: number; table: GameState } | null>(null);
 
   useEffect(() => {
     latestTablesRef.current = tables;
@@ -708,8 +710,8 @@ export default function GameTable() {
     });
   }, [tables]);
 
-  const triggerPreSolve = useCallback(async (tableIndex: number) => {
-    const table = latestTablesRef.current[tableIndex];
+  const triggerPreSolve = useCallback(async (tableIndex: number, tableOverride?: GameState) => {
+    const table = tableOverride ?? latestTablesRef.current[tableIndex];
     if (!table || table.phase !== 'playing') return;
 
     const boardCards = table.communityCards.map(c => `${c.rank}${c.suit[0]}`).join(',');
@@ -876,10 +878,11 @@ export default function GameTable() {
 
         if (villainActedThisStreet) {
           // Both checked — advance street
-          advanceToNextStreet(newTable, hero, villain);
+          advanceToNextStreet(newTable, hero, villain, tableIndex);
         } else {
-          // Villain's turn
+          // Villain's turn — 保存完整 table 供 processOpponentAction 使用
           newTable.currentPosition = villain.position;
+          pendingOpponentTableRef.current = { tableIndex, table: structuredClone(newTable) };
         }
         return newTable;
 
@@ -898,7 +901,7 @@ export default function GameTable() {
         });
 
         // Bets matched — advance to next street
-        advanceToNextStreet(newTable, hero, villain);
+        advanceToNextStreet(newTable, hero, villain, tableIndex);
         return newTable;
 
       } else if (action === 'bet') {
@@ -918,6 +921,7 @@ export default function GameTable() {
         });
 
         newTable.currentPosition = villain.position;
+        pendingOpponentTableRef.current = { tableIndex, table: structuredClone(newTable) };
         return newTable;
 
       } else if (action === 'raise') {
@@ -938,6 +942,7 @@ export default function GameTable() {
         });
 
         newTable.currentPosition = villain.position;
+        pendingOpponentTableRef.current = { tableIndex, table: structuredClone(newTable) };
         return newTable;
 
       } else if (action === 'allin') {
@@ -960,23 +965,31 @@ export default function GameTable() {
         });
 
         newTable.currentPosition = villain.position;
+        pendingOpponentTableRef.current = { tableIndex, table: structuredClone(newTable) };
         return newTable;
       }
 
       return newTable;
     }));
 
-    // Schedule opponent action
+    // Schedule opponent action，优先使用 pending 的完整 table 避免 path 不完整
+    // 稍长 delay 确保 pre-solve（尤其 river）有足够时间完成
     setTimeout(() => {
-      processOpponentAction(tableIndex);
-    }, 800);
+      const p = pendingOpponentTableRef.current;
+      if (p && p.tableIndex === tableIndex) {
+        processOpponentAction(tableIndex, p.table);
+        pendingOpponentTableRef.current = null;
+      } else {
+        processOpponentAction(tableIndex);
+      }
+    }, 5000);
   }, []);
 
   // ─── Opponent Action ───────────────────────────────────────────────────
 
-  const processOpponentAction = useCallback(async (tableIndex: number) => {
-    // We cannot reliably get state using setTables asynchronously, so we use a ref.
-    const tableToAct = latestTablesRef.current[tableIndex];
+  const processOpponentAction = useCallback(async (tableIndex: number, tableOverride?: GameState) => {
+    // 优先使用传入的完整 table（含 hero 刚做的 action），避免 ref 未同步导致 path 不完整
+    const tableToAct = tableOverride ?? latestTablesRef.current[tableIndex];
     if (!tableToAct || tableToAct.phase !== 'playing') return;
 
     const villainInfo = tableToAct.players.find(p => !p.isHero && p.isActive && !p.hasFolded);
@@ -1019,6 +1032,7 @@ export default function GameTable() {
 
     let decision: { action: 'fold' | 'check' | 'call' | 'bet' | 'raise' | 'allin'; amount?: number } | null = null;
 
+    console.log(`[GTO] path: ${path.join(' -> ')}`);
     try {
       const res = await fetch('http://127.0.0.1:5000/api/action', {
         method: 'POST',
@@ -1033,6 +1047,9 @@ export default function GameTable() {
 
       if (res.ok) {
         const data = await res.json();
+        if (data?.strategy) {
+          console.log('[GTO] strategy:', data.strategy);
+        }
         if (data && data.action) {
           // Parse action
           const parts = data.action.split(' ');
@@ -1118,7 +1135,7 @@ export default function GameTable() {
         // Both checked — advance street
         const heroActedThisStreet = currentHistory?.actions.some(a => a.position === newHero.position) ?? false;
         if (heroActedThisStreet) {
-          advanceToNextStreet(newTable, newHero, newVillain);
+          advanceToNextStreet(newTable, newHero, newVillain, tableIndex);
         } else {
           newTable.currentPosition = newHero.position;
         }
@@ -1138,7 +1155,7 @@ export default function GameTable() {
         });
 
         // Bets matched — advance street
-        advanceToNextStreet(newTable, newHero, newVillain);
+        advanceToNextStreet(newTable, newHero, newVillain, tableIndex);
 
       } else if (decisionApplied.action === 'bet') {
         const betAmount = decisionApplied.amount || 1;
@@ -1203,7 +1220,7 @@ export default function GameTable() {
           newTable.currentPosition = newHero.position;
         } else {
           // Both are all-in or bets matched — run out remaining cards
-          advanceToNextStreet(newTable, newHero, newVillain);
+          advanceToNextStreet(newTable, newHero, newVillain, tableIndex);
         }
       }
 
@@ -1213,7 +1230,7 @@ export default function GameTable() {
 
   // ─── Advance Street Logic ─────────────────────────────────────────────
 
-  function advanceToNextStreet(table: GameState, hero: Player, villain: Player) {
+  function advanceToNextStreet(table: GameState, hero: Player, villain: Player, tableIndex?: number) {
     // Reset per-street bets
     hero.currentBet = 0;
     villain.currentBet = 0;
@@ -1258,10 +1275,14 @@ export default function GameTable() {
 
     if (bothAllin || oneAllin) {
       // Run out remaining streets automatically
-      advanceToNextStreet(table, hero, villain);
+      advanceToNextStreet(table, hero, villain, tableIndex);
     } else {
       // OOP (BB) acts first
       table.currentPosition = hero.position; // hero = BB = OOP
+      // Flop→Turn / Turn→River 时立即触发 pre-solve，不依赖 useEffect 减少延迟
+      if ((nextStreet === 'turn' || nextStreet === 'river') && tableIndex !== undefined) {
+        triggerPreSolve(tableIndex, table);
+      }
     }
   }
 
