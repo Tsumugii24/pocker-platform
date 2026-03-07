@@ -78,6 +78,7 @@ export interface GameState {
   handNumber: number;
   currentBet: number;        // highest bet on current street that must be matched
   lastRaiseSize: number;     // size of the last raise (for min-raise calc)
+  initialDeck?: Card[];      // the shuffled deck at the start of the hand
   showdownResult?: ShowdownResult;
 }
 

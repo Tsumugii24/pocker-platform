@@ -29,7 +29,7 @@ import { Input } from '@/components/ui/input';
 import { HandHistoryDrawer } from '@/components/HandHistoryDrawer';
 import { SettingsDialog } from '@/components/SettingsDialog';
 import { ActionHistoryPopover } from '@/components/ActionHistoryPopover';
-import { Settings, History, LogOut, Play, User } from 'lucide-react';
+import { Settings, History, LogOut, Play, User, RotateCcw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getPlayerSeats, getSeatPosition } from '@/lib/position-utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -45,6 +45,7 @@ interface TableViewProps {
   quickBetSizes: number[];
   onAction: (action: 'check' | 'fold' | 'call' | 'bet' | 'raise' | 'allin', amount?: number) => void;
   onStartNew: () => void;
+  onRepeatHand: () => void;
   onLeave: () => void;
 }
 
@@ -56,6 +57,7 @@ function TableView({
   quickBetSizes,
   onAction,
   onStartNew,
+  onRepeatHand,
   onLeave,
 }: TableViewProps) {
   const [selectedBet, setSelectedBet] = useState(gameState.pot * 0.5 || 1);
@@ -155,14 +157,6 @@ function TableView({
               <div className={cn('text-gray-500', isSingleView ? 'text-lg' : 'text-sm')}>
                 等待开局
               </div>
-              <Button
-                onClick={onStartNew}
-                size={isSingleView ? 'lg' : 'default'}
-                className="bg-[#00d084] hover:bg-[#00d084]/90 text-black font-semibold gap-2"
-              >
-                <Play className={cn(isSingleView ? 'w-5 h-5' : 'w-4 h-4')} />
-                Start New
-              </Button>
             </div>
 
             {/* Show empty player slots */}
@@ -180,10 +174,29 @@ function TableView({
         </div>
         {/* Empty action area */}
         <div className={cn(
-          'border-t border-[#333333] flex items-center justify-center',
+          'border-t border-[#333333] flex flex-col items-center justify-center gap-2',
           isSingleView ? 'h-32' : 'h-24'
         )}>
-          <div className="text-gray-600 text-sm">点击 Start New 开始新的一手</div>
+          <div className="text-gray-600 text-xs mb-1">点击 Start New 开始新的一手</div>
+          {gameState.initialDeck && (
+            <Button
+              onClick={onRepeatHand}
+              variant="outline"
+              size={isSingleView ? 'default' : 'sm'}
+              className="border-[#00d084] text-[#00d084] hover:bg-[#00d084]/10 font-semibold gap-2"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Repeat Hand
+            </Button>
+          )}
+          <Button
+            onClick={onStartNew}
+            size={isSingleView ? 'default' : 'sm'}
+            className="bg-[#00d084] hover:bg-[#00d084]/90 text-black font-semibold gap-2 px-6"
+          >
+            <Play className="w-4 h-4" />
+            Start New
+          </Button>
         </div>
       </div>
     );
@@ -296,6 +309,18 @@ function TableView({
             <Play className="w-4 h-4" />
             Start New
           </Button>
+
+          {gameState.initialDeck && (
+            <Button
+              onClick={onRepeatHand}
+              variant="outline"
+              size={isSingleView ? 'default' : 'sm'}
+              className="border-[#00d084] text-[#00d084] hover:bg-[#00d084]/10 font-semibold gap-2"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Repeat Hand
+            </Button>
+          )}
         </div>
       </div>
     );
@@ -663,6 +688,13 @@ export default function GameTable() {
       if (i !== tableIndex) return table;
       const newHandNumber = table.handNumber + 1;
       return createSRPGame(newHandNumber, testConfig);
+    }));
+  }, [testConfig]);
+
+  const handleRepeatHand = useCallback((tableIndex: number) => {
+    setTables(prev => prev.map((table, i) => {
+      if (i !== tableIndex) return table;
+      return createSRPGame(table.handNumber, testConfig, table.initialDeck);
     }));
   }, [testConfig]);
 
@@ -1125,17 +1157,6 @@ export default function GameTable() {
             </Button>
           )}
 
-          {/* Start New — when idle or showdown */}
-          {isSingleView && tables[0].phase !== 'playing' && (
-            <Button
-              onClick={() => handleStartNew(0)}
-              size="sm"
-              className="bg-[#00d084] hover:bg-[#00d084]/90 text-black font-semibold gap-2"
-            >
-              <Play className="w-4 h-4" />
-              Start New
-            </Button>
-          )}
         </div>
       </div>
 
@@ -1150,6 +1171,7 @@ export default function GameTable() {
             quickBetSizes={quickBetSizes}
             onAction={(action, amount) => handleAction(0, action, amount)}
             onStartNew={() => handleStartNew(0)}
+            onRepeatHand={() => handleRepeatHand(0)}
             onLeave={() => handleLeave(0)}
           />
         ) : (
@@ -1169,6 +1191,7 @@ export default function GameTable() {
                 quickBetSizes={quickBetSizes}
                 onAction={(action, amount) => handleAction(index, action, amount)}
                 onStartNew={() => handleStartNew(index)}
+                onRepeatHand={() => handleRepeatHand(index)}
                 onLeave={() => handleLeave(index)}
               />
             ))}

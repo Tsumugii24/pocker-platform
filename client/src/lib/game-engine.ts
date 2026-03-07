@@ -328,7 +328,7 @@ export function getOpponentAction(
  *
  * Postflop: BB (OOP) acts first on every street.
  */
-export function createSRPGame(handNumber: number = 1, config?: TestConfig): GameState {
+export function createSRPGame(handNumber: number = 1, config?: TestConfig, forcedDeck?: Card[]): GameState {
   const cfg: TestConfig = config ?? {
     heroPosition: 'BB',
     villainPosition: 'UTG',
@@ -336,7 +336,8 @@ export function createSRPGame(handNumber: number = 1, config?: TestConfig): Game
     stackDepthBB: 100,
   };
 
-  let deck = shuffleDeck(createDeck());
+  const initialDeck = forcedDeck ? [...forcedDeck] : shuffleDeck(createDeck());
+  let deck = [...initialDeck];
 
   // Deal hole cards
   const { cards: heroCards, remaining: deck1 } = dealCards(deck, 2);
@@ -358,10 +359,10 @@ export function createSRPGame(handNumber: number = 1, config?: TestConfig): Game
       position: 'UTG',
       stack: remainingStack,
       cards: villainCards as [Card, Card],
-      isHero: cfg.villainPosition === 'UTG' && cfg.heroPosition === 'UTG',
       isActive: true,
       hasFolded: false,
       currentBet: 0,
+      isHero: false,
     },
     { position: 'HJ', stack: cfg.stackDepthBB, isHero: false, isActive: false, hasFolded: true, currentBet: 0 },
     { position: 'CO', stack: cfg.stackDepthBB, isHero: false, isActive: false, hasFolded: true, currentBet: 0 },
@@ -371,10 +372,10 @@ export function createSRPGame(handNumber: number = 1, config?: TestConfig): Game
       position: 'BB',
       stack: remainingStack,
       cards: heroCards as [Card, Card],
-      isHero: cfg.heroPosition === 'BB',
       isActive: true,
       hasFolded: false,
       currentBet: 0,
+      isHero: false,
     },
   ];
 
@@ -419,6 +420,7 @@ export function createSRPGame(handNumber: number = 1, config?: TestConfig): Game
     handNumber,
     currentBet: 0,
     lastRaiseSize: 0,
+    initialDeck,
   };
 }
 
