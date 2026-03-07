@@ -23,14 +23,17 @@ export function SettingsDialog({
   onTestConfigChange,
 }: SettingsDialogProps) {
   const [tempSizes, setTempSizes] = useState<number[]>(quickBetSizes);
+  const [tempTestConfig, setTempTestConfig] = useState<TestConfig>(testConfig);
 
   useEffect(() => {
     setTempSizes(quickBetSizes);
-  }, [quickBetSizes, isOpen]);
+    setTempTestConfig(testConfig);
+  }, [quickBetSizes, testConfig, isOpen]);
 
   const handleSave = () => {
     onQuickBetSizesChange(tempSizes);
     localStorage.setItem('poker_quick_bet_sizes', JSON.stringify(tempSizes));
+    onTestConfigChange(tempTestConfig);
     onClose();
   };
 
@@ -62,8 +65,74 @@ export function SettingsDialog({
                   <p className="text-xs text-gray-500">当前仅支持 BB vs UTG</p>
                 </div>
                 <div className="bg-[#1a1a1a] border border-[#333333] rounded px-3 py-2 text-sm text-gray-300">
-                  {testConfig.heroPosition} vs {testConfig.villainPosition}
+                  {tempTestConfig.heroPosition} vs {tempTestConfig.villainPosition}
                 </div>
+              </div>
+
+              {/* Deal Mode */}
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label className="text-sm font-medium">发牌模式 (Start New)</Label>
+                    <p className="text-xs text-gray-500">
+                      {tempTestConfig.dealMode === 'custom' ? '手动选择翻牌 (Flop)' : '完全随机发牌'}
+                    </p>
+                  </div>
+                  <select
+                    value={tempTestConfig.dealMode || 'random'}
+                    onChange={(e) => setTempTestConfig(prev => ({ ...prev, dealMode: e.target.value as 'random' | 'custom' }))}
+                    className="bg-[#1a1a1a] border border-[#333333] rounded px-3 py-2 text-sm text-gray-300 focus:outline-none focus:border-[#00d084]"
+                  >
+                    <option value="random">Random (随机)</option>
+                    <option value="custom">Custom (用户自选公共牌)</option>
+                  </select>
+                </div>
+                {tempTestConfig.dealMode === 'custom' && (
+                  <div className="flex items-center justify-between pl-4 border-l-2 border-[#333333] ml-1 mt-1">
+                    <div>
+                      <Label className="text-sm font-medium">手牌也自定义</Label>
+                      <p className="text-xs text-gray-500">
+                        如果不勾选，手牌 (Hole Cards) 将保持随机
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={!!tempTestConfig.customHoleCards}
+                      onChange={(e) => setTempTestConfig(prev => ({ ...prev, customHoleCards: e.target.checked }))}
+                      className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#00d084]"
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-sm font-medium">Player Bluff (玩家允许诈唬)</Label>
+                  <p className="text-xs text-gray-500">
+                    关闭时将仅分配标准 GTO Preflop 范围内的手牌
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={tempTestConfig.allowPlayerBluff ?? true}
+                  onChange={(e) => setTempTestConfig(prev => ({ ...prev, allowPlayerBluff: e.target.checked }))}
+                  className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#00d084]"
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-sm font-medium">AI Bluff (AI允许诈唬)</Label>
+                  <p className="text-xs text-gray-500">
+                    关闭时将仅为 AI 分配标准 GTO Preflop 范围内的手牌
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={tempTestConfig.allowAIBluff ?? true}
+                  onChange={(e) => setTempTestConfig(prev => ({ ...prev, allowAIBluff: e.target.checked }))}
+                  className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#00d084]"
+                />
               </div>
 
               {/* Pot Type */}
@@ -84,7 +153,7 @@ export function SettingsDialog({
                   <p className="text-xs text-gray-500">每位玩家的起始筹码</p>
                 </div>
                 <div className="bg-[#1a1a1a] border border-[#333333] rounded px-3 py-2 text-sm text-gray-300">
-                  {testConfig.stackDepthBB} BB
+                  {tempTestConfig.stackDepthBB} BB
                 </div>
               </div>
 
@@ -95,7 +164,7 @@ export function SettingsDialog({
                   <p className="text-xs text-gray-500">Flop 阶段开始时的剩余筹码</p>
                 </div>
                 <div className="bg-[#1a1a1a] border border-[#333333] rounded px-3 py-2 text-sm text-[#00d084] font-semibold">
-                  {testConfig.stackDepthBB - 2.5} BB
+                  {tempTestConfig.stackDepthBB - 2.5} BB
                 </div>
               </div>
 

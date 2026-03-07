@@ -36,6 +36,10 @@ export interface TestConfig {
   villainPosition: Position;
   potType: PotType;
   stackDepthBB: number; // total starting stack in BB (e.g. 100)
+  dealMode?: 'random' | 'custom';
+  customHoleCards?: boolean; // whether to also pick hole cards in custom deal mode
+  allowPlayerBluff?: boolean;
+  allowAIBluff?: boolean;
 }
 
 export const DEFAULT_TEST_CONFIG: TestConfig = {
@@ -43,6 +47,10 @@ export const DEFAULT_TEST_CONFIG: TestConfig = {
   villainPosition: 'UTG',
   potType: 'SRP',
   stackDepthBB: 100,
+  dealMode: 'random',
+  customHoleCards: false,
+  allowPlayerBluff: true,
+  allowAIBluff: true,
 };
 
 export interface Player {

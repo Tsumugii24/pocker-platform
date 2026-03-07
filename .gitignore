@@ -6,6 +6,7 @@ node_modules/
 dist/
 build/
 .cache/
+cache/
 .parcel-cache/
 .vite/
 .tsbuildinfo

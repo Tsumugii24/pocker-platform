@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -9,9 +9,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import type { GameState, Player, StreetHistory, TestConfig, ShowdownResult } from '@/types/poker';
+import type { GameState, Player, StreetHistory, TestConfig, ShowdownResult, Card } from '@/types/poker';
 import { DEFAULT_TEST_CONFIG } from '@/types/poker';
 import { formatBB, getScenarioLabel } from '@/lib/poker-utils';
+import { generateHoleCards } from '@/lib/range-utils';
 import {
   createSRPGame,
   createIdleTable,
@@ -20,6 +21,8 @@ import {
   getCardsForStreet,
   resolveShowdown,
   saveHandToHistory,
+  createDeck,
+  shuffleDeck,
 } from '@/lib/game-engine';
 import { PlayerPosition } from '@/components/PlayerPosition';
 import { PokerCard, WaitingCard } from '@/components/PokerCard';
@@ -28,6 +31,7 @@ import { Slider } from '@/components/ui/slider';
 import { Input } from '@/components/ui/input';
 import { HandHistoryDrawer } from '@/components/HandHistoryDrawer';
 import { SettingsDialog } from '@/components/SettingsDialog';
+import { CustomHandDialog } from '@/components/CustomHandDialog';
 import { ActionHistoryPopover } from '@/components/ActionHistoryPopover';
 import { Settings, History, LogOut, Play, User, RotateCcw } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -228,8 +232,9 @@ function TableView({
                 {getScenarioLabel(gameState.config)}
               </div>
 
-              <div className={cn('font-bold', isSingleView ? 'text-3xl' : 'text-xl')}>
+              <div className={cn('font-bold flex items-center gap-2', isSingleView ? 'text-3xl' : 'text-xl')}>
                 Pot: {formatBB(pot)}
+                <ActionHistoryPopover history={gameState.history} isSingleView={isSingleView} />
               </div>
 
               {/* Community Cards */}
@@ -680,16 +685,114 @@ export default function GameTable() {
   });
   const [showHandHistory, setShowHandHistory] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showCustomHandDialog, setShowCustomHandDialog] = useState(false);
+  const [customHandTableIndex, setCustomHandTableIndex] = useState<number | null>(null);
+
+  const latestTablesRef = useRef(tables);
+  const prevStreetsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    latestTablesRef.current = tables;
+
+    // Eager Solving/Pre-solve trigger
+    tables.forEach((table, i) => {
+      const streetKey = `${table.id}_${table.currentStreet}_${table.communityCards.length}`;
+      if (prevStreetsRef.current[i] !== streetKey && table.phase === 'playing') {
+        const villain = table.players.find(p => !p.isHero);
+        // If it's NOT the AI's turn, but a new card just dropped, notify backend to start solving
+        if (villain && table.currentPosition !== villain.position) {
+          triggerPreSolve(i);
+        }
+      }
+      prevStreetsRef.current[i] = streetKey;
+    });
+  }, [tables]);
+
+  const triggerPreSolve = useCallback(async (tableIndex: number) => {
+    const table = latestTablesRef.current[tableIndex];
+    if (!table || table.phase !== 'playing') return;
+
+    const boardCards = table.communityCards.map(c => `${c.rank}${c.suit[0]}`).join(',');
+    const villain = table.players.find(p => !p.isHero);
+    const hero = table.players.find(p => p.isHero);
+    if (!villain || !hero) return;
+
+    let path: string[] = [];
+    table.history.forEach(round => {
+      if (round.street === 'preflop') return;
+      if (round.street === 'turn' || round.street === 'river') {
+        const cardGot = round.cards?.[0];
+        if (cardGot) path.push(`DEAL:${cardGot.rank}${cardGot.suit[0]}`);
+      }
+      round.actions.forEach(a => {
+        if (a.type === 'bet' || a.type === 'raise' || a.type === 'allin') {
+          path.push(`${a.type.toUpperCase()} ${a.amount}`);
+        } else {
+          path.push(a.type.toUpperCase());
+        }
+      });
+    });
+
+    console.log(`[Pre-solve] Triggering for table ${tableIndex}, path: ${path.join(' -> ')}`);
+    try {
+      await fetch('http://127.0.0.1:5000/api/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          board: boardCards,
+          path,
+          hand: '', // Hand doesn't matter for pre-solving street transition
+          effective_stack: Math.min(hero.stack, villain.stack)
+        })
+      });
+    } catch (e) {
+      console.error("Pre-solve trigger failed", e);
+    }
+  }, []);
 
   // ─── Start New Hand ────────────────────────────────────────────────────
 
   const handleStartNew = useCallback((tableIndex: number) => {
+    if (testConfig.dealMode === 'custom') {
+      setCustomHandTableIndex(tableIndex);
+      setShowCustomHandDialog(true);
+      return;
+    }
     setTables(prev => prev.map((table, i) => {
       if (i !== tableIndex) return table;
       const newHandNumber = table.handNumber + 1;
       return createSRPGame(newHandNumber, testConfig);
     }));
   }, [testConfig]);
+
+  const handleCustomHandConfirm = useCallback((selectedCards: Card[]) => {
+    if (customHandTableIndex === null) return;
+
+    const fullDeck = createDeck();
+    const isSelected = (c: Card) => selectedCards.some(sc => sc.rank === c.rank && sc.suit === c.suit);
+    let remainingCards = shuffleDeck(fullDeck.filter(c => !isSelected(c)));
+
+    let forcedDeckPrefix: Card[];
+    if (testConfig.customHoleCards) {
+      // selectedCards length is 7: [hero1, hero2, villain1, villain2, flop1, flop2, flop3]
+      forcedDeckPrefix = [...selectedCards];
+    } else {
+      // selectedCards length is 3: [flop1, flop2, flop3]
+      const { heroHole, villainHole, remainingDeck } = generateHoleCards(testConfig, selectedCards, remainingCards);
+      remainingCards = remainingDeck;
+      forcedDeckPrefix = [...heroHole, ...villainHole, ...selectedCards];
+    }
+
+    const forcedDeck = [...forcedDeckPrefix, ...remainingCards];
+
+    setTables(prev => prev.map((table, i) => {
+      if (i !== customHandTableIndex) return table;
+      const newHandNumber = table.handNumber + 1;
+      return createSRPGame(newHandNumber, testConfig, forcedDeck);
+    }));
+    setShowCustomHandDialog(false);
+    setCustomHandTableIndex(null);
+  }, [customHandTableIndex, testConfig]);
 
   const handleRepeatHand = useCallback((tableIndex: number) => {
     setTables(prev => prev.map((table, i) => {
@@ -871,10 +974,97 @@ export default function GameTable() {
 
   // ─── Opponent Action ───────────────────────────────────────────────────
 
-  const processOpponentAction = useCallback((tableIndex: number) => {
+  const processOpponentAction = useCallback(async (tableIndex: number) => {
+    // We cannot reliably get state using setTables asynchronously, so we use a ref.
+    const tableToAct = latestTablesRef.current[tableIndex];
+    if (!tableToAct || tableToAct.phase !== 'playing') return;
+
+    const villainInfo = tableToAct.players.find(p => !p.isHero && p.isActive && !p.hasFolded);
+    const heroInfo = tableToAct.players.find(p => p.isHero);
+
+    if (!villainInfo || !heroInfo || tableToAct.currentPosition !== villainInfo.position) {
+      return; // Abort
+    }
+
+
+    // Attempt GTO AI Backend
+    const boardCards = tableToAct.communityCards.map(c => `${c.rank}${c.suit[0]}`).join(',');
+
+    // Construct Path from history
+    let path: string[] = [];
+    tableToAct.history.forEach(round => {
+      // Except preflop!
+      if (round.street === 'preflop') return;
+
+      if (round.street === 'turn' || round.street === 'river') {
+        const cardGot = round.cards?.[0];
+        if (cardGot) {
+          path.push(`DEAL:${cardGot.rank}${cardGot.suit[0]}`);
+        }
+      }
+
+      round.actions.forEach(a => {
+        if (a.type === 'bet' || a.type === 'raise') {
+          path.push(`${a.type.toUpperCase()} ${a.amount}`);
+        } else if (a.type === 'allin') {
+          // GTO maps all in to an amount usually or "ALLIN"
+          path.push(`ALLIN ${a.amount}`);
+        } else {
+          path.push(a.type.toUpperCase());
+        }
+      });
+    });
+
+    const villainHole = villainInfo.cards ? `${villainInfo.cards[0].rank}${villainInfo.cards[0].suit[0]}${villainInfo.cards[1].rank}${villainInfo.cards[1].suit[0]}` : '';
+
+    let decision: { action: 'fold' | 'check' | 'call' | 'bet' | 'raise' | 'allin'; amount?: number } | null = null;
+
+    try {
+      const res = await fetch('http://127.0.0.1:5000/api/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          board: boardCards,
+          path,
+          hand: villainHole,
+          effective_stack: Math.min(heroInfo.stack, villainInfo.stack)
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.action) {
+          // Parse action
+          const parts = data.action.split(' ');
+          const act = parts[0].toLowerCase();
+          if (['fold', 'check', 'call', 'bet', 'raise', 'allin'].includes(act)) {
+            decision = { action: act as any };
+            if (parts.length > 1) {
+              decision.amount = parseFloat(parts[1]);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Backend AI failed or not reachable, falling back to random');
+    }
+
+    // Fallback exactly as it was
+    if (!decision) {
+      decision = getOpponentAction(
+        tableToAct.pot,
+        tableToAct.currentBet,
+        villainInfo.currentBet,
+        villainInfo.stack
+      );
+    }
+
+    const finalDecision = decision;
+
+    // Now apply state update
     setTables(prev => prev.map((table, i) => {
       if (i !== tableIndex || table.phase !== 'playing') return table;
-
+      // Re-verify it's still villain's turn
       const villain = table.players.find(p => !p.isHero && p.isActive && !p.hasFolded);
       const hero = table.players.find(p => p.isHero);
       if (!villain || !hero || table.currentPosition !== villain.position) return table;
@@ -884,14 +1074,9 @@ export default function GameTable() {
       const newHero = newTable.players.find(p => p.isHero)!;
       const currentHistory = newTable.history.find(h => h.street === newTable.currentStreet);
 
-      const decision = getOpponentAction(
-        newTable.pot,
-        newTable.currentBet,
-        newVillain.currentBet,
-        newVillain.stack,
-      );
+      const decisionApplied = finalDecision;
 
-      if (decision.action === 'fold') {
+      if (decisionApplied.action === 'fold') {
         newVillain.hasFolded = true;
         newTable.currentPosition = null;
         newTable.phase = 'showdown';
@@ -922,7 +1107,7 @@ export default function GameTable() {
           );
         }
 
-      } else if (decision.action === 'check') {
+      } else if (decisionApplied.action === 'check') {
         currentHistory?.actions.push({
           position: newVillain.position,
           type: 'check',
@@ -938,8 +1123,8 @@ export default function GameTable() {
           newTable.currentPosition = newHero.position;
         }
 
-      } else if (decision.action === 'call') {
-        const callAmount = decision.amount || (newTable.currentBet - newVillain.currentBet);
+      } else if (decisionApplied.action === 'call') {
+        const callAmount = decisionApplied.amount || (newTable.currentBet - newVillain.currentBet);
         newVillain.stack -= callAmount;
         newVillain.currentBet += callAmount;
         newTable.pot += callAmount;
@@ -955,8 +1140,8 @@ export default function GameTable() {
         // Bets matched — advance street
         advanceToNextStreet(newTable, newHero, newVillain);
 
-      } else if (decision.action === 'bet') {
-        const betAmount = decision.amount || 1;
+      } else if (decisionApplied.action === 'bet') {
+        const betAmount = decisionApplied.amount || 1;
         newVillain.stack -= betAmount;
         newVillain.currentBet += betAmount;
         newTable.pot += betAmount;
@@ -973,8 +1158,8 @@ export default function GameTable() {
 
         newTable.currentPosition = newHero.position;
 
-      } else if (decision.action === 'raise') {
-        const raiseAmount = decision.amount || 1;
+      } else if (decisionApplied.action === 'raise') {
+        const raiseAmount = decisionApplied.amount || 1;
         newVillain.stack -= raiseAmount;
         newVillain.currentBet += raiseAmount;
         newTable.pot += raiseAmount;
@@ -992,7 +1177,7 @@ export default function GameTable() {
 
         newTable.currentPosition = newHero.position;
 
-      } else if (decision.action === 'allin') {
+      } else if (decisionApplied.action === 'allin') {
         const allinAmount = newVillain.stack;
         newVillain.currentBet += allinAmount;
         newVillain.stack = 0;
@@ -1243,6 +1428,18 @@ export default function GameTable() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <CustomHandDialog
+        isOpen={showCustomHandDialog}
+        onClose={() => {
+          setShowCustomHandDialog(false);
+          setCustomHandTableIndex(null);
+        }}
+        onConfirm={handleCustomHandConfirm}
+        heroPosition={testConfig.heroPosition}
+        villainPosition={testConfig.villainPosition}
+        customHoleCards={testConfig.customHoleCards}
+      />
     </div>
   );
 }

@@ -9,6 +9,7 @@ import type {
   TestConfig,
   ShowdownResult,
 } from '@/types/poker';
+import { generateHoleCards } from './range-utils';
 
 // ─── Card Utilities ──────────────────────────────────────────────────────────
 
@@ -339,10 +340,23 @@ export function createSRPGame(handNumber: number = 1, config?: TestConfig, force
   const initialDeck = forcedDeck ? [...forcedDeck] : shuffleDeck(createDeck());
   let deck = [...initialDeck];
 
-  // Deal hole cards
-  const { cards: heroCards, remaining: deck1 } = dealCards(deck, 2);
-  const { cards: villainCards, remaining: deck2 } = dealCards(deck1, 2);
-  deck = deck2;
+  let heroCards: [Card, Card];
+  let villainCards: [Card, Card];
+
+  if (forcedDeck) {
+    // Deal hole cards from forcedDeck
+    const dealt1 = dealCards(deck, 2);
+    heroCards = dealt1.cards as [Card, Card];
+    const dealt2 = dealCards(dealt1.remaining, 2);
+    villainCards = dealt2.cards as [Card, Card];
+    deck = dealt2.remaining;
+  } else {
+    // Random deal: use range-utils to enforce bluff rules
+    const res = generateHoleCards(cfg, [], deck);
+    heroCards = res.heroHole;
+    villainCards = res.villainHole;
+    deck = res.remainingDeck;
+  }
 
   // Deal flop
   const { cards: flopCards, remaining: deck3 } = dealCards(deck, 3);
