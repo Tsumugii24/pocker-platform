@@ -67,6 +67,7 @@ def get_action():
     action_path = data.get('path', [])
     ai_hand = data.get('hand', '')
     fe_eff_stack = data.get('effective_stack') # Optional from frontend for precision
+    dataset_source = data.get('datasetSource') # 'huggingface' or 'hf-mirror'
     
     if not board_str:
         return jsonify({"error": "Missing initial board"}), 400
@@ -83,7 +84,7 @@ def get_action():
         try:
             from download_from_hf import download_board_from_hf
             cache_dir = str(gto_dir / "cache")
-            downloaded = download_board_from_hf(flop_board, cache_dir=cache_dir)
+            downloaded = download_board_from_hf(flop_board, cache_dir=cache_dir, preferred_source=dataset_source)
             if downloaded and downloaded.exists():
                 data_file = str(downloaded)
                 data_path = downloaded
@@ -470,31 +471,42 @@ def get_action():
         return jsonify({"error": str(e)}), 500
 
 import functools
-@functools.lru_cache(maxsize=1)
-def _get_solved_boards_from_hf():
+@functools.lru_cache(maxsize=2)
+def _get_solved_boards_from_hf(preferred_source=None):
     import os
-    try:
+    
+    # helper for specific source
+    def _fetch(endpoint=None):
         from huggingface_hub import HfApi
-        api = HfApi()
+        api = HfApi(endpoint=endpoint) if endpoint else HfApi()
         files = api.list_repo_files(repo_id="Tsumugii/gto-srp-100bb-v1", repo_type="dataset")
-        boards = [f.split('.')[0] for f in files if f.endswith('.parquet')]
-        return boards
+        return [f.split('.')[0] for f in files if f.endswith('.parquet')]
+
+    if preferred_source == 'hf-mirror':
+        try:
+            os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+            return _fetch("https://hf-mirror.com")
+        except Exception:
+            # fallback to official
+            try: return _fetch()
+            except: return []
+
+    # Default logic (try official then mirror)
+    try:
+        return _fetch()
     except Exception as e:
         print("[API Error] huggingface.co failed to fetch boards:", e, ". Trying HF-Mirror...")
         try:
-            from huggingface_hub import HfApi
             os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
-            api = HfApi(endpoint="https://hf-mirror.com")
-            files = api.list_repo_files(repo_id="Tsumugii/gto-srp-100bb-v1", repo_type="dataset")
-            boards = [f.split('.')[0] for f in files if f.endswith('.parquet')]
-            return boards
+            return _fetch("https://hf-mirror.com")
         except Exception as e2:
             print("[API Error] hf-mirror.com also failed:", e2)
             return []
 
 @app.route('/api/solved-boards', methods=['GET'])
 def get_solved_boards():
-    boards = _get_solved_boards_from_hf()
+    source = request.args.get('source')
+    boards = _get_solved_boards_from_hf(source)
     return jsonify({"boards": boards}), 200
 
 @app.route('/api/test-hf-connection', methods=['GET'])

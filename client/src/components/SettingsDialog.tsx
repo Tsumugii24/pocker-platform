@@ -319,6 +319,35 @@ export function SettingsDialog({
                 </div>
               </div>
               <p className="text-[10px] text-gray-500 pt-1">注意：当从HuggingFace下载牌面解算数据失败时，会自动尝试镜像源</p>
+
+              {/* Dataset Source Selection */}
+              <div className="border-t border-[#333333] pt-4 mt-4">
+                <Label className="text-sm font-medium block mb-3">默认下载源设定</Label>
+                <div className="flex flex-col gap-2">
+                  <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="datasetSource"
+                      value="huggingface"
+                      checked={tempTestConfig.datasetSource !== 'hf-mirror'}
+                      onChange={() => setTempTestConfig({ ...tempTestConfig, datasetSource: 'huggingface' })}
+                      className="text-[#00d084] focus:ring-[#00d084] bg-[#1a1a1a] border-[#333333]"
+                    />
+                    HuggingFace 官方站 (默认)
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="datasetSource"
+                      value="hf-mirror"
+                      checked={tempTestConfig.datasetSource === 'hf-mirror'}
+                      onChange={() => setTempTestConfig({ ...tempTestConfig, datasetSource: 'hf-mirror' })}
+                      className="text-[#00d084] focus:ring-[#00d084] bg-[#1a1a1a] border-[#333333]"
+                    />
+                    HF-Mirror 镜像站 (推荐国内网络直连使用)
+                  </label>
+                </div>
+              </div>
             </div>
           </div>
 

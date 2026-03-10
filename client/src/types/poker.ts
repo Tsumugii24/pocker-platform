@@ -41,6 +41,7 @@ export interface TestConfig {
   allowPlayerBluff?: boolean;
   allowAIBluff?: boolean;
   enableMDF?: boolean; // MDF 防守机制功能开关
+  datasetSource?: 'huggingface' | 'hf-mirror'; // 数据集下载源
 }
 
 export const DEFAULT_TEST_CONFIG: TestConfig = {

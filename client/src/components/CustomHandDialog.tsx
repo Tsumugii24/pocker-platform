@@ -13,6 +13,7 @@ interface CustomHandDialogProps {
     heroPosition: Position;
     villainPosition: Position;
     customHoleCards?: boolean;
+    datasetSource?: 'huggingface' | 'hf-mirror';
 }
 
 const SUITS: Suit[] = ['spades', 'hearts', 'diamonds', 'clubs'];
@@ -25,6 +26,7 @@ export function CustomHandDialog({
     heroPosition,
     villainPosition,
     customHoleCards = false,
+    datasetSource,
 }: CustomHandDialogProps) {
     const slotCount = customHoleCards ? 7 : 3;
     // If customHoleCards: 7 slots [Hero1, Hero2, Villain1, Villain2, Flop1, Flop2, Flop3]
@@ -39,7 +41,8 @@ export function CustomHandDialog({
             setActiveSlot(0);
 
             if (solvedBoards.length === 0) {
-                fetch('/api/solved-boards')
+                const url = datasetSource ? `/api/solved-boards?source=${datasetSource}` : '/api/solved-boards';
+                fetch(url)
                     .then(res => res.json())
                     .then(data => {
                         if (data.boards) setSolvedBoards(data.boards);

@@ -746,7 +746,8 @@ export default function GameTable() {
           path,
           hand: '', // Hand doesn't matter for pre-solving street transition
           effective_stack: Math.min(hero.stack, villain.stack),
-          use_mdf: table.config.enableMDF || false
+          use_mdf: table.config.enableMDF || false,
+          datasetSource: testConfig.datasetSource
         })
       });
     } catch (e) {
@@ -1044,7 +1045,8 @@ export default function GameTable() {
           path,
           hand: villainHole,
           effective_stack: Math.min(heroInfo.stack, villainInfo.stack),
-          use_mdf: tableToAct.config.enableMDF || false
+          use_mdf: tableToAct.config.enableMDF || false,
+          datasetSource: testConfig.datasetSource
         })
       });
 
@@ -1463,6 +1465,7 @@ export default function GameTable() {
         heroPosition={testConfig.heroPosition}
         villainPosition={testConfig.villainPosition}
         customHoleCards={testConfig.customHoleCards}
+        datasetSource={testConfig.datasetSource}
       />
     </div>
   );

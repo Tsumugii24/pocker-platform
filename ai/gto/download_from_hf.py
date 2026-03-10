@@ -84,6 +84,7 @@ def download_board_from_hf(
     board: str,
     cache_dir: str = DEFAULT_CACHE,
     repo_id: str = DEFAULT_REPO,
+    preferred_source: str = None,
 ) -> Optional[Path]:
     """
     从 HuggingFace 下载单个牌面的 Parquet 到指定目录。
@@ -92,6 +93,7 @@ def download_board_from_hf(
         board: 牌面名称，如 Ac2c2d 或 Ac,Ad,Ah
         cache_dir: 下载目录
         repo_id: HuggingFace dataset repo
+        preferred_source: 优先下载源 ('huggingface' 或 'hf-mirror')
 
     Returns:
         下载后的本地路径，失败返回 None
@@ -108,11 +110,19 @@ def download_board_from_hf(
 
     try:
         import os
+        
+        # 如果指定了镜像站，提前设置环境变量
+        if preferred_source == 'hf-mirror':
+            os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+            print(f"Using preferred source: HF-Mirror")
+
         remote_path = find_file_in_repo(repo_id, board)
         if not remote_path:
             return None
         
         try:
+            # 尝试主要下载
+            endpoint = "https://hf-mirror.com" if preferred_source == 'hf-mirror' else None
             local_path = hf_hub_download(
                 repo_id=repo_id,
                 filename=remote_path,
@@ -120,9 +130,15 @@ def download_board_from_hf(
                 local_dir=str(cache_path),
                 local_dir_use_symlinks=False,
                 force_download=False,
+                endpoint=endpoint
             )
         except Exception as e:
-            print(f"HuggingFace download failed: {e}. Trying HF-Mirror...")
+            if preferred_source == 'hf-mirror':
+                # 如果镜像站都挂了，那彻底没办法了
+                print(f"Preferred HF-Mirror failed: {e}")
+                return None
+            
+            print(f"HuggingFace official failed: {e}. Trying HF-Mirror fallback...")
             os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
             local_path = hf_hub_download(
                 repo_id=repo_id,
