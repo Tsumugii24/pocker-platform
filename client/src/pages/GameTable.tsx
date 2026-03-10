@@ -744,7 +744,8 @@ export default function GameTable() {
           board: boardCards,
           path,
           hand: '', // Hand doesn't matter for pre-solving street transition
-          effective_stack: Math.min(hero.stack, villain.stack)
+          effective_stack: Math.min(hero.stack, villain.stack),
+          use_mdf: table.config.enableMDF || false
         })
       });
     } catch (e) {
@@ -1041,7 +1042,8 @@ export default function GameTable() {
           board: boardCards,
           path,
           hand: villainHole,
-          effective_stack: Math.min(heroInfo.stack, villainInfo.stack)
+          effective_stack: Math.min(heroInfo.stack, villainInfo.stack),
+          use_mdf: tableToAct.config.enableMDF || false
         })
       });
 

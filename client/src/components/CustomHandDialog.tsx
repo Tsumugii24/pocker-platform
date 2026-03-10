@@ -31,13 +31,23 @@ export function CustomHandDialog({
     // If not customHoleCards: 3 slots [Flop1, Flop2, Flop3]
     const [slots, setSlots] = useState<(Card | null)[]>(Array(slotCount).fill(null));
     const [activeSlot, setActiveSlot] = useState<number>(0);
+    const [solvedBoards, setSolvedBoards] = useState<string[]>([]);
 
     useEffect(() => {
         if (isOpen) {
             setSlots(Array(slotCount).fill(null));
             setActiveSlot(0);
+
+            if (solvedBoards.length === 0) {
+                fetch('http://127.0.0.1:5000/api/solved-boards')
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.boards) setSolvedBoards(data.boards);
+                    })
+                    .catch(console.error);
+            }
         }
-    }, [isOpen, slotCount]);
+    }, [isOpen, slotCount, solvedBoards.length]);
 
     const handleCardClick = (card: Card) => {
         const isSelectedIdx = slots.findIndex(
@@ -117,6 +127,68 @@ export function CustomHandDialog({
         );
     };
 
+    const getFlopPermutations = (f1: Card, f2: Card, f3: Card) => {
+        const s1 = f1.rank + f1.suit[0];
+        const s2 = f2.rank + f2.suit[0];
+        const s3 = f3.rank + f3.suit[0];
+        return [
+            s1 + s2 + s3,
+            s1 + s3 + s2,
+            s2 + s1 + s3,
+            s2 + s3 + s1,
+            s3 + s1 + s2,
+            s3 + s2 + s1
+        ];
+    };
+
+    const isCurrentFlopSolved = () => {
+        const flopStart = customHoleCards ? 4 : 0;
+        const f1 = slots[flopStart];
+        const f2 = slots[flopStart + 1];
+        const f3 = slots[flopStart + 2];
+        if (!f1 || !f2 || !f3) return null;
+        if (solvedBoards.length === 0) return null;
+
+        const perms = getFlopPermutations(f1, f2, f3);
+        const solvedSet = new Set(solvedBoards);
+        return perms.some(p => solvedSet.has(p));
+    };
+
+    const handleRandomSolvedBoard = () => {
+        if (solvedBoards.length === 0) return;
+        const rIndex = Math.floor(Math.random() * solvedBoards.length);
+        const boardStr = solvedBoards[rIndex];
+
+        const parseBoardCard = (idx: number): Card => {
+            const r = boardStr[idx * 2] as Rank;
+            const sChar = boardStr[idx * 2 + 1];
+            const suitMap: Record<string, Suit> = { 's': 'spades', 'h': 'hearts', 'd': 'diamonds', 'c': 'clubs' };
+            return { rank: r, suit: suitMap[sChar] || 'spades' };
+        };
+
+        const newSlots = [...slots];
+        const flopStart = customHoleCards ? 4 : 0;
+        const newFlop = [parseBoardCard(0), parseBoardCard(1), parseBoardCard(2)];
+
+        for (let i = 0; i < slotCount; i++) {
+            if (i >= flopStart && i < flopStart + 3) continue;
+            const existing = newSlots[i];
+            if (existing && newFlop.some(nf => nf.rank === existing.rank && nf.suit === existing.suit)) {
+                newSlots[i] = null;
+            }
+        }
+
+        newSlots[flopStart] = newFlop[0];
+        newSlots[flopStart + 1] = newFlop[1];
+        newSlots[flopStart + 2] = newFlop[2];
+
+        setSlots(newSlots);
+        const nextEmpty = newSlots.findIndex((c) => c === null);
+        setActiveSlot(nextEmpty !== -1 ? nextEmpty : slotCount);
+    };
+
+    const solvedStatus = isCurrentFlopSolved();
+
     return (
         <Dialog open={isOpen} onOpenChange={onClose}>
             <DialogContent className="bg-[#0a0a0a] border-[#333333] text-white w-full max-w-[95vw] sm:max-w-[850px]">
@@ -125,17 +197,40 @@ export function CustomHandDialog({
                 </DialogHeader>
 
                 <div className="py-4 space-y-8">
-                    {/* Selected Cards Area */}
-                    <div className="flex justify-center gap-8 p-4 bg-[#111] rounded-lg border border-[#222]">
-                        {customHoleCards && (
-                            <>
-                                {renderSlotGroup(`Hero (${heroPosition})`, 0, 2)}
-                                <div className="w-px bg-[#333333]" />
-                                {renderSlotGroup(`Villain (${villainPosition})`, 2, 2)}
-                                <div className="w-px bg-[#333333]" />
-                            </>
+                    <div className="flex flex-col items-center gap-4">
+                        <div className="flex justify-center gap-8 p-4 bg-[#111] rounded-lg border border-[#222]">
+                            {customHoleCards && (
+                                <>
+                                    {renderSlotGroup(`Hero (${heroPosition})`, 0, 2)}
+                                    <div className="w-px bg-[#333333]" />
+                                    {renderSlotGroup(`Villain (${villainPosition})`, 2, 2)}
+                                    <div className="w-px bg-[#333333]" />
+                                </>
+                            )}
+                            {renderSlotGroup("Flop", customHoleCards ? 4 : 0, 3)}
+                        </div>
+
+                        {solvedStatus !== null && (
+                            <div className={cn(
+                                "flex items-center justify-center px-4 py-2 rounded-md border text-sm font-semibold max-w-sm w-full",
+                                solvedStatus
+                                    ? "bg-[#00d084]/10 border-[#00d084]/20 text-[#00d084]"
+                                    : "bg-red-500/10 border-red-500/20 text-red-500"
+                            )}>
+                                {solvedStatus
+                                    ? "✅ 牌面已解算"
+                                    : "❌ 暂未解算 (AI会使用默认的随机策略)"}
+                            </div>
                         )}
-                        {renderSlotGroup("Flop", customHoleCards ? 4 : 0, 3)}
+
+                        <Button
+                            variant="outline"
+                            className="bg-[#1a1a1a] border-[#333333] hover:bg-[#333333] hover:text-white text-gray-300 text-xs py-1 h-8"
+                            onClick={handleRandomSolvedBoard}
+                            disabled={solvedBoards.length === 0}
+                        >
+                            {solvedBoards.length === 0 ? "Loading Solved Boards..." : "🎲 随机选取一个已解算的 Flop"}
+                        </Button>
                     </div>
 
                     {/* Deck Picker */}

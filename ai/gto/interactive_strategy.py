@@ -388,6 +388,9 @@ def run_interactive(data_file: str) -> None:
     current_ip_range = querier.initial_ranges['ip'].copy()
     current_oop_range = querier.initial_ranges['oop'].copy()
 
+    player_ip_hand: Optional[str] = None
+    ai_oop_hand: Optional[str] = None
+
     print("\n" + "=" * 60)
     print("交互式策略查询 | Player (IP) 先手 vs AI (OOP)")
     print("=" * 60)
@@ -421,7 +424,21 @@ def run_interactive(data_file: str) -> None:
 
             is_player_turn = player == 1  # Player = IP (树根先手), AI = OOP
             range_dict = current_ip_range if is_player_turn else current_oop_range
-            hand = _pick_hand_from_strategy(strategy_dict, range_dict)
+            
+            # 保持双方手牌在整个对局中不变（如果在当前策略中存在）
+            if is_player_turn:
+                if player_ip_hand and (player_ip_hand in strategy_dict or (len(player_ip_hand) == 4 and player_ip_hand[2:4]+player_ip_hand[0:2] in strategy_dict)):
+                    hand = player_ip_hand
+                else:
+                    hand = _pick_hand_from_strategy(strategy_dict, range_dict)
+                    player_ip_hand = hand
+            else:
+                if ai_oop_hand and (ai_oop_hand in strategy_dict or (len(ai_oop_hand) == 4 and ai_oop_hand[2:4]+ai_oop_hand[0:2] in strategy_dict)):
+                    hand = ai_oop_hand
+                else:
+                    hand = _pick_hand_from_strategy(strategy_dict, range_dict)
+                    ai_oop_hand = hand
+
             if not hand:
                 hand = random.choice(list(strategy_dict.keys()))
 
@@ -503,10 +520,71 @@ def run_interactive(data_file: str) -> None:
                         break
                     print(f"无效输入，可选: {actions}")
             else:
-                # AI (OOP) 按概率权重随机选择（非选最高）
-                action = _sample_action_by_probs(actions, probs)
-                chosen_prob = next((p for a, p in zip(actions, probs) if a == action), 0)
-                print(f"\nAI 选择: {action} ({chosen_prob:.1%} 概率，按权重随机抽样)")
+                use_mdf = False
+                if street == 'flop' and effective_call_amount > 0 and path_display:
+                    prev_act = path_display[-1].upper()
+                    is_bet = prev_act.startswith("BET") or prev_act.startswith("DONK")
+                    is_raise = prev_act.startswith("RAISE")
+                    
+                    if is_bet or is_raise:
+                        pot_before = pot - effective_call_amount
+                        if pot_before > 0:
+                            proportion = effective_call_amount / pot_before
+                            has_mdf_condition = False
+                            if is_bet and proportion > 0.66:
+                                has_mdf_condition = True
+                            elif is_raise and proportion > 1.33:
+                                has_mdf_condition = True
+                            
+                            if has_mdf_condition:
+                                # 专业 MDF 公式: 目标防守频率 = 下注前Pot / (下注前Pot + 下注/加注额) = pot_before / pot
+                                # 能够应对所有尺寸的情况
+                                mdf = pot_before / pot 
+                                use_mdf = True
+                if use_mdf and ev_dict:
+                    fold_action = next((a for a in actions if a.upper() == 'FOLD'), None)
+                    fold_ev = ev_dict[fold_action] if fold_action and fold_action in ev_dict else 0.0
+                    
+                    adjusted_evs = {a: v - fold_ev for a, v in ev_dict.items()}
+                    
+                    call_action = next((a for a in actions if a.upper() == 'CALL'), None)
+                    if not call_action:
+                        call_action = next((a for a in actions if a.upper() not in ['FOLD'] and not a.upper().startswith(('BET', 'RAISE', 'DONK'))), None)
+                    
+                    if call_action and fold_action:
+                        max_defend_ev = max([v for a, v in adjusted_evs.items() if a != fold_action], default=0.0)
+                        
+                        # 按要求：将防守阈值的基准改为 “下注前/加注前POT”
+                        threshold = pot_before * mdf 
+                        
+                        print("\n" + "=" * 40)
+                        print("--- MDF 防守流程开始 ---")
+                        print(f"触发条件: 面临 {'Bet' if is_bet else 'Raise'} (下注金额 {effective_call_amount:.0f} / 下注前底池 {pot_before:.0f} = {proportion:.2f})")
+                        print(f"根据公式计算 MDF: {pot_before:.0f} / ({pot_before:.0f} + {effective_call_amount:.0f}) = {mdf:.3f}")
+                        print(f"原始 Fold EV: {fold_ev:.3f}")
+                        print("调整后各动作 EV (基准 Fold EV=0):")
+                        for a in actions:
+                            print(f"  {a}: {adjusted_evs.get(a, 0.0):.3f}")
+                        print(f"\n评价防守: 下注前 Pot = {pot_before:.0f}")
+                        print(f"防守阈值 (Pot(前) * MDF): {pot_before:.0f} * {mdf:.3f} = {threshold:.3f}")
+                        
+                        if max_defend_ev >= threshold:
+                            action = call_action
+                            print(f"判断结果: 存在防守 EV ({max_defend_ev:.3f}) >= 阈值，选择 {action}!")
+                        else:
+                            action = fold_action
+                            print(f"判断结果: 防守 EV ({max_defend_ev:.3f}) < 阈值，放弃防守，选择 {action}!")
+                        print("--- MDF 防守流程结束 ---")
+                        print("=" * 40)
+                    else:
+                        use_mdf = False
+
+                if not use_mdf:
+                    # AI (OOP) 按概率权重随机选择（非选最高）
+                    action = _sample_action_by_probs(actions, probs)
+                    chosen_prob = next((p for a, p in zip(actions, probs) if a == action), 0)
+                    print(f"\nAI 选择: {action} ({chosen_prob:.1%} 概率，按权重随机抽样)")
+                    
                 path_display.append(action)
                 # AI 的 bet/raise 更新 effective_call_amount；CHECK/CALL/FOLD 则清零
                 if action.upper().startswith(("BET", "RAISE", "DONK")):

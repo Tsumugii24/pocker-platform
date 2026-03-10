@@ -40,6 +40,7 @@ export interface TestConfig {
   customHoleCards?: boolean; // whether to also pick hole cards in custom deal mode
   allowPlayerBluff?: boolean;
   allowAIBluff?: boolean;
+  enableMDF?: boolean; // MDF 防守机制功能开关
 }
 
 export const DEFAULT_TEST_CONFIG: TestConfig = {
@@ -51,6 +52,7 @@ export const DEFAULT_TEST_CONFIG: TestConfig = {
   customHoleCards: false,
   allowPlayerBluff: true,
   allowAIBluff: true,
+  enableMDF: false,
 };
 
 export interface Player {

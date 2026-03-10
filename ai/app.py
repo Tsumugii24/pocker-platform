@@ -13,10 +13,33 @@ app = Flask(__name__)
 CORS(app)
 
 # Global cache for the querier to avoid reloading the large Parquet file
-current_querier_cache = {
-    'board': None,
-    'querier': None
-}
+import functools
+import threading
+
+@functools.lru_cache(maxsize=32)
+def _get_parsed_config_data(config_path_str: str):
+    from parse_solver_result import parse_config, _expand_range_to_hands
+    config_data = parse_config(config_path_str)
+    board_list = [c.strip() for c in (config_data.get('board', '')).split(',') if c.strip()]
+    ip_range = _expand_range_to_hands(config_data.get('ip_range', {}), board_list)
+    oop_range = _expand_range_to_hands(config_data.get('oop_range', {}), board_list)
+    
+    initial_pot = 5.0
+    effective_stack = 100.0
+    with open(config_path_str, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith('set_pot'): initial_pot = float(line.split()[1])
+            if line.startswith('set_effective_stack'): effective_stack = float(line.split()[1])
+            
+    return config_data, ip_range, oop_range, initial_pot, effective_stack
+
+_data_load_lock = threading.Lock()
+
+@functools.lru_cache(maxsize=32)
+def _get_loaded_game_data(data_file_str: str):
+    from query_action_line import _load_data
+    return _load_data(Path(data_file_str))
 
 # Global set to track currently solving tasks to avoid redundant triggers
 currently_solving = set()
@@ -96,33 +119,23 @@ def get_action():
         if not config_path:
             return jsonify({"error": "No config found for board"}), 404
             
-        global current_querier_cache
-        if current_querier_cache['board'] == flop_board and current_querier_cache['querier'] is not None:
-            querier = current_querier_cache['querier']
-            # 每次请求必须从 flop 树开始 replay，否则上次加载的 turn/river 会污染 querier.data
-            querier.data = _load_data(Path(data_file))
-            querier.data_path = Path(data_file)
-            querier.config_path = Path(config_path)
-            config_data = parse_config(str(config_path))
-            board_list = [c.strip() for c in (config_data.get('board', '')).split(',') if c.strip()]
-            querier.initial_ranges = {
-                'ip': _expand_range_to_hands(config_data.get('ip_range', {}), board_list),
-                'oop': _expand_range_to_hands(config_data.get('oop_range', {}), board_list)
-            }
-            querier.initial_pot = 5.0
-            querier.effective_stack = 100.0
-            with open(str(config_path), 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith('set_pot'): querier.initial_pot = float(line.split()[1])
-                    if line.startswith('set_effective_stack'): querier.effective_stack = float(line.split()[1])
-        else:
-            print(f"[API Info] Loading fresh config/parquet: {flop_board}")
-            querier = ActionLineQuery(data_file, config_path)
-            querier.load()
-            current_querier_cache['board'] = flop_board
-            current_querier_cache['querier'] = querier
+        # Use LRU caching to handle parallel setups on different boards instantly
+        config_info = _get_parsed_config_data(str(config_path))
+        with _data_load_lock:
+            cached_data = _get_loaded_game_data(str(data_file))
 
+        querier = ActionLineQuery(data_file, config_path)
+        querier.data = cached_data
+        querier.data_path = Path(data_file)
+        querier.config_path = Path(config_path)
+
+        config_data, ip_rng, oop_rng, init_pot, eff_stack = config_info
+        querier.initial_ranges = {
+            'ip': ip_rng.copy(),
+            'oop': oop_rng.copy()
+        }
+        querier.initial_pot = init_pot
+        querier.effective_stack = eff_stack
         inferred = _infer_flop_board_from_path(Path(data_file))
         querier.board = inferred if inferred else ",".join(board_str.split(',')[:3])
         
@@ -152,7 +165,7 @@ def get_action():
                 
                 resolved_actions.append((step, tree_action))
                 if tree_action.upper().startswith(("BET", "RAISE", "DONK")):
-                    amt = extract_amount_from_action(tree_action)
+                    amt = extract_amount_from_action(step)
                     effective_call_amount = amt if amt is not None else 0.0
                 else:
                     effective_call_amount = 0.0
@@ -284,7 +297,7 @@ def get_action():
         q_path_state, q_init_pot = _get_path_and_initial_for_pot(
             step_path_so_far, board_count, querier.initial_pot, querier.effective_stack
         )
-        _, oop_added, ip_added = _calc_street_state(q_path_state, q_init_pot)
+        pot, oop_added, ip_added = _calc_street_state(q_path_state, q_init_pot)
         calc_remaining_stack = max(0.0, querier.effective_stack - max(oop_added, ip_added))
         final_remaining_stack = float(fe_eff_stack) if fe_eff_stack is not None else calc_remaining_stack
 
@@ -339,20 +352,85 @@ def get_action():
             return jsonify({"action": "check"}), 200
             
         probs = _get_probs_for_hand(ai_hand, strategy_dict, actions)
+        hand_ev_dict = _get_ev_for_hand(ai_hand, evs_dict, actions) or {}
+        
         if not probs or len(actions) != len(probs):
             import random
             if strategy_dict:
                 proxy_hand = random.choice(list(strategy_dict.keys()))
                 probs = _get_probs_for_hand(proxy_hand, strategy_dict, actions)
+                hand_ev_dict = _get_ev_for_hand(proxy_hand, evs_dict, actions) or {}
             if not probs or len(actions) != len(probs):
                 return jsonify({"action": "check"}), 200
             
         # Filter invalid raises
         if effective_call_amount > 0:
-            actions_f, probs_f, _ = filter_invalid_raise_actions(actions, probs, effective_call_amount, evs_dict)
-            if actions_f: actions, probs = actions_f, probs_f
+            actions_f, probs_f, ev_dict_f = filter_invalid_raise_actions(actions, probs, effective_call_amount, hand_ev_dict)
+            if actions_f: 
+                actions = actions_f
+                probs = probs_f
+                if ev_dict_f:
+                    hand_ev_dict = ev_dict_f
 
-        action_chosen = _sample_action_by_probs(actions, probs)
+        # Apply MDF logic if enabled from frontend
+        use_mdf = data.get('use_mdf', False)
+        mdf_triggered = False
+
+        if use_mdf and board_count == 3 and effective_call_amount > 0 and step_path_so_far:
+            prev_act = step_path_so_far[-1].upper()
+            is_bet = prev_act.startswith("BET") or prev_act.startswith("DONK")
+            is_raise = prev_act.startswith("RAISE")
+            
+            if is_bet or is_raise:
+                pot_before = pot - effective_call_amount
+                if pot_before > 0:
+                    proportion = effective_call_amount / pot_before
+                    # 专业 MDF 公式: 目标防守频率 = 下注前Pot / (下注前Pot + 下注/加注额) = pot_before / pot
+                    
+                    has_mdf_condition = False
+                    if is_bet and proportion > 0.66:
+                        has_mdf_condition = True
+                    elif is_raise and proportion > 1.33:
+                        has_mdf_condition = True
+                    
+                    if has_mdf_condition:
+                        mdf = pot_before / pot
+                        
+                        fold_action = next((a for a in actions if a.upper() == 'FOLD'), None)
+                        fold_ev = hand_ev_dict.get(fold_action, 0.0) if fold_action else 0.0
+                        adjusted_evs = {a: v - fold_ev for a, v in hand_ev_dict.items()}
+                        
+                        call_action = next((a for a in actions if a.upper() == 'CALL'), None)
+                        if not call_action:
+                            call_action = next((a for a in actions if a.upper() not in ['FOLD'] and not a.upper().startswith(('BET', 'RAISE', 'DONK'))), None)
+                        
+                        if call_action and fold_action:
+                            max_defend_ev = max([v for a, v in adjusted_evs.items() if a != fold_action], default=0.0)
+                            threshold = pot_before * mdf 
+                            
+                            print("\n" + "=" * 40)
+                            print("[API] --- MDF 防守流程开始 ---")
+                            print(f"[API] 触发条件: 面临 {'Bet' if is_bet else 'Raise'} (下注金额 {effective_call_amount:.0f} / 下注前底池 {pot_before:.0f} = {proportion:.2f})")
+                            print(f"[API] 根据公式计算 MDF: {pot_before:.0f} / ({pot_before:.0f} + {effective_call_amount:.0f}) = {mdf:.3f}")
+                            print(f"[API] 原始 Fold EV: {fold_ev:.3f}")
+                            print("调整后各动作 EV (基准 Fold EV=0):")
+                            for a in actions:
+                                print(f"  {a}: {adjusted_evs.get(a, 0.0):.3f}")
+                            print(f"\n[API] 评价防守: 下注前 Pot = {pot_before:.0f}")
+                            print(f"[API] 防守阈值 (Pot(前) * MDF): {pot_before:.0f} * {mdf:.3f} = {threshold:.3f}")
+                            
+                            if max_defend_ev >= threshold:
+                                action_chosen = call_action
+                                print(f"[API] 判断结果: 存在防守 EV ({max_defend_ev:.3f}) >= 阈值，选择 {action_chosen}!")
+                            else:
+                                action_chosen = fold_action
+                                print(f"[API] 判断结果: 防守 EV ({max_defend_ev:.3f}) < 阈值，放弃防守，选择 {action_chosen}!")
+                            print("[API] --- MDF 防守流程结束 ---")
+                            print("=" * 40)
+                            mdf_triggered = True
+
+        if not mdf_triggered:
+            action_chosen = _sample_action_by_probs(actions, probs)
         
         # Sanity cap AI action
         if action_chosen.upper().startswith(("BET", "RAISE", "DONK")):
@@ -390,6 +468,24 @@ def get_action():
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+import functools
+@functools.lru_cache(maxsize=1)
+def _get_solved_boards_from_hf():
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi()
+        files = api.list_repo_files(repo_id="Tsumugii/gto-srp-100bb-v1", repo_type="dataset")
+        boards = [f.split('.')[0] for f in files if f.endswith('.parquet')]
+        return boards
+    except Exception as e:
+        print("[API Error] failed to fetch HF boards:", e)
+        return []
+
+@app.route('/api/solved-boards', methods=['GET'])
+def get_solved_boards():
+    boards = _get_solved_boards_from_hf()
+    return jsonify({"boards": boards}), 200
 
 if __name__ == '__main__':
     app.run(port=5000, debug=True)

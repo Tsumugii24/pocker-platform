@@ -135,6 +135,21 @@ export function SettingsDialog({
                 />
               </div>
 
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-sm font-medium">MDF 防守机制 (Flop阶段)</Label>
+                  <p className="text-xs text-gray-500">
+                    开启时，面临较大尺寸下注/加注时，AI 会严格按底池比例 (MDF) 防守
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={!!tempTestConfig.enableMDF}
+                  onChange={(e) => setTempTestConfig(prev => ({ ...prev, enableMDF: e.target.checked }))}
+                  className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#00d084]"
+                />
+              </div>
+
               {/* Pot Type */}
               <div className="flex items-center justify-between">
                 <div>
