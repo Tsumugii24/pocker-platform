@@ -472,6 +472,7 @@ def get_action():
 import functools
 @functools.lru_cache(maxsize=1)
 def _get_solved_boards_from_hf():
+    import os
     try:
         from huggingface_hub import HfApi
         api = HfApi()
@@ -479,8 +480,17 @@ def _get_solved_boards_from_hf():
         boards = [f.split('.')[0] for f in files if f.endswith('.parquet')]
         return boards
     except Exception as e:
-        print("[API Error] failed to fetch HF boards:", e)
-        return []
+        print("[API Error] huggingface.co failed to fetch boards:", e, ". Trying HF-Mirror...")
+        try:
+            from huggingface_hub import HfApi
+            os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+            api = HfApi(endpoint="https://hf-mirror.com")
+            files = api.list_repo_files(repo_id="Tsumugii/gto-srp-100bb-v1", repo_type="dataset")
+            boards = [f.split('.')[0] for f in files if f.endswith('.parquet')]
+            return boards
+        except Exception as e2:
+            print("[API Error] hf-mirror.com also failed:", e2)
+            return []
 
 @app.route('/api/solved-boards', methods=['GET'])
 def get_solved_boards():
