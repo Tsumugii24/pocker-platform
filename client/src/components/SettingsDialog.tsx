@@ -56,7 +56,7 @@ export function SettingsDialog({
     setMirrorTest({ status: 'pending' });
 
     try {
-      const res = await fetch('http://127.0.0.1:5000/api/test-hf-connection');
+      const res = await fetch('/api/test-hf-connection');
       const data = await res.json();
 
       setHfTest({

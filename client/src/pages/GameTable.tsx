@@ -737,7 +737,8 @@ export default function GameTable() {
 
     console.log(`[Pre-solve] Triggering for table ${tableIndex}, path: ${path.join(' -> ')}`);
     try {
-      await fetch('http://127.0.0.1:5000/api/action', {
+      // Pre-run query request to warm up cache
+      await fetch('/api/action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1035,7 +1036,7 @@ export default function GameTable() {
 
     console.log(`[GTO] path: ${path.join(' -> ')}`);
     try {
-      const res = await fetch('http://127.0.0.1:5000/api/action', {
+      const res = await fetch('/api/action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

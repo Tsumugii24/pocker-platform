@@ -39,7 +39,7 @@ export function CustomHandDialog({
             setActiveSlot(0);
 
             if (solvedBoards.length === 0) {
-                fetch('http://127.0.0.1:5000/api/solved-boards')
+                fetch('/api/solved-boards')
                     .then(res => res.json())
                     .then(data => {
                         if (data.boards) setSolvedBoards(data.boards);

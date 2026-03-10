@@ -27,7 +27,14 @@ export default defineConfig({
     allowedHosts: [
       "localhost",
       "127.0.0.1",
+      "all"
     ],
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:5000',
+        changeOrigin: true
+      }
+    },
     fs: {
       strict: true,
       deny: ["**/.*"],
