@@ -5,6 +5,12 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import type { TestConfig } from '@/types/poker';
 
+interface NetworkTestResult {
+  status: 'pending' | 'ok' | 'failed' | 'idle';
+  latency_ms?: number;
+  error?: string;
+}
+
 interface SettingsDialogProps {
   isOpen: boolean;
   onClose: () => void;
@@ -25,6 +31,9 @@ export function SettingsDialog({
   const [tempSizes, setTempSizes] = useState<number[]>(quickBetSizes);
   const [tempTestConfig, setTempTestConfig] = useState<TestConfig>(testConfig);
 
+  const [hfTest, setHfTest] = useState<NetworkTestResult>({ status: 'idle' });
+  const [mirrorTest, setMirrorTest] = useState<NetworkTestResult>({ status: 'idle' });
+
   useEffect(() => {
     setTempSizes(quickBetSizes);
     setTempTestConfig(testConfig);
@@ -40,6 +49,31 @@ export function SettingsDialog({
   const handleReset = () => {
     const defaultSizes = [33, 50, 75, 100, 125, 150, 175, 200];
     setTempSizes(defaultSizes);
+  };
+
+  const handleNetworkTest = async () => {
+    setHfTest({ status: 'pending' });
+    setMirrorTest({ status: 'pending' });
+
+    try {
+      const res = await fetch('http://127.0.0.1:5000/api/test-hf-connection');
+      const data = await res.json();
+
+      setHfTest({
+        status: data.huggingface?.status === 'ok' ? 'ok' : 'failed',
+        latency_ms: data.huggingface?.latency_ms,
+        error: data.huggingface?.error
+      });
+
+      setMirrorTest({
+        status: data.hf_mirror?.status === 'ok' ? 'ok' : 'failed',
+        latency_ms: data.hf_mirror?.latency_ms,
+        error: data.hf_mirror?.error
+      });
+    } catch (err) {
+      setHfTest({ status: 'failed', error: 'API unreachable' });
+      setMirrorTest({ status: 'failed', error: 'API unreachable' });
+    }
   };
 
   return (
@@ -239,6 +273,53 @@ export function SettingsDialog({
             >
               恢复默认值 (33%, 50%, 75%, 100%, 125%, 150%, 175%, 200%)
             </Button>
+          </div>
+
+          {/* Network Connectivity Test */}
+          <div className="border-t border-[#333333] pt-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-[#00d084]">数据集下载源连通性测试</h3>
+              <Button
+                onClick={handleNetworkTest}
+                variant="outline"
+                size="sm"
+                disabled={hfTest.status === 'pending' || mirrorTest.status === 'pending'}
+                className="bg-[#1a1a1a] border-[#333333] hover:bg-[#333333] text-gray-200"
+              >
+                {hfTest.status === 'pending' || mirrorTest.status === 'pending' ? '测试中...' : '▶ 运行连通性测试'}
+              </Button>
+            </div>
+
+            <div className="space-y-2">
+              {/* HF Official */}
+              <div className="flex items-center justify-between bg-[#111] border border-[#333333] rounded-lg p-3">
+                <div>
+                  <Label className="text-sm font-medium">HuggingFace (海外官方站)</Label>
+                  <p className="text-[10px] text-gray-500">huggingface.co</p>
+                </div>
+                <div className="text-right">
+                  {hfTest.status === 'idle' && <span className="text-gray-500 text-sm">-</span>}
+                  {hfTest.status === 'pending' && <span className="text-gray-400 text-sm">Testing...</span>}
+                  {hfTest.status === 'ok' && <span className="text-[#00d084] text-sm tabular-nums font-semibold">{hfTest.latency_ms} ms</span>}
+                  {hfTest.status === 'failed' && <span className="text-red-500 text-sm font-semibold truncate max-w-[150px]" title={hfTest.error}>失败/超时</span>}
+                </div>
+              </div>
+
+              {/* HF Mirror */}
+              <div className="flex items-center justify-between bg-[#111] border border-[#333333] rounded-lg p-3">
+                <div>
+                  <Label className="text-sm font-medium">HF-Mirror (国内镜像站)</Label>
+                  <p className="text-[10px] text-gray-500">hf-mirror.com</p>
+                </div>
+                <div className="text-right">
+                  {mirrorTest.status === 'idle' && <span className="text-gray-500 text-sm">-</span>}
+                  {mirrorTest.status === 'pending' && <span className="text-gray-400 text-sm">Testing...</span>}
+                  {mirrorTest.status === 'ok' && <span className="text-[#00d084] text-sm tabular-nums font-semibold">{mirrorTest.latency_ms} ms</span>}
+                  {mirrorTest.status === 'failed' && <span className="text-red-500 text-sm font-semibold truncate max-w-[150px]" title={mirrorTest.error}>失败/超时</span>}
+                </div>
+              </div>
+              <p className="text-[10px] text-gray-500 pt-1">注意：当从HuggingFace下载牌面解算数据失败时，会自动尝试镜像源</p>
+            </div>
           </div>
 
           {/* Betting Rules */}

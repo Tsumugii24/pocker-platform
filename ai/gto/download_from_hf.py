@@ -45,9 +45,18 @@ def board_to_filename(board: str) -> str:
     return board.replace(",", "")
 
 
-def find_file_in_repo(api: HfApi, repo_id: str, board: str) -> Optional[str]:
-    """在 repo 中查找牌面对应的 parquet 文件路径（大小写不敏感）"""
-    files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
+def find_file_in_repo(repo_id: str, board: str) -> Optional[str]:
+    """在 repo 中查找牌面对应的 parquet 文件路径（大小写不敏感），包含镜像站降级支持"""
+    import os
+    try:
+        api = HfApi()
+        files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
+    except Exception as e:
+        print(f"HuggingFace query failed: {e}. Trying HF-Mirror...")
+        os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+        api = HfApi(endpoint="https://hf-mirror.com")
+        files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
+
     fname = board_to_filename(board)
     fname_lower = fname.lower()
     for f in files:
@@ -98,20 +107,36 @@ def download_board_from_hf(
     cache_path.mkdir(parents=True, exist_ok=True)
 
     try:
-        api = HfApi()
-        remote_path = find_file_in_repo(api, repo_id, board)
+        import os
+        remote_path = find_file_in_repo(repo_id, board)
         if not remote_path:
             return None
-        local_path = hf_hub_download(
-            repo_id=repo_id,
-            filename=remote_path,
-            repo_type="dataset",
-            local_dir=str(cache_path),
-            local_dir_use_symlinks=False,
-            force_download=False,
-        )
+        
+        try:
+            local_path = hf_hub_download(
+                repo_id=repo_id,
+                filename=remote_path,
+                repo_type="dataset",
+                local_dir=str(cache_path),
+                local_dir_use_symlinks=False,
+                force_download=False,
+            )
+        except Exception as e:
+            print(f"HuggingFace download failed: {e}. Trying HF-Mirror...")
+            os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+            local_path = hf_hub_download(
+                repo_id=repo_id,
+                filename=remote_path,
+                repo_type="dataset",
+                local_dir=str(cache_path),
+                local_dir_use_symlinks=False,
+                force_download=False,
+                endpoint="https://hf-mirror.com"
+            )
+            
         return Path(local_path)
-    except Exception:
+    except Exception as e:
+        print(f"Fetch failed completely: {e}")
         return None
 
 
@@ -193,7 +218,7 @@ def main() -> None:
     fail = 0
     for board in boards:
         fname = board_to_filename(board)
-        remote_path = find_file_in_repo(api, repo_id, board)
+        remote_path = find_file_in_repo(repo_id, board)
         if not remote_path:
             print(f"  [跳过] {board} - 未在 repo 中找到")
             fail += 1

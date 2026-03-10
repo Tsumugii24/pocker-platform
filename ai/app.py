@@ -487,5 +487,27 @@ def get_solved_boards():
     boards = _get_solved_boards_from_hf()
     return jsonify({"boards": boards}), 200
 
+@app.route('/api/test-hf-connection', methods=['GET'])
+def test_hf_connection():
+    import time
+    import requests
+    results = {}
+    
+    start = time.time()
+    try:
+        requests.get("https://huggingface.co/api/datasets/Tsumugii/gto-srp-100bb-v1", timeout=3)
+        results['huggingface'] = {'status': 'ok', 'latency_ms': int((time.time() - start) * 1000)}
+    except Exception as e:
+        results['huggingface'] = {'status': 'failed', 'error': str(e)}
+        
+    start = time.time()
+    try:
+        requests.get("https://hf-mirror.com/api/datasets/Tsumugii/gto-srp-100bb-v1", timeout=3)
+        results['hf_mirror'] = {'status': 'ok', 'latency_ms': int((time.time() - start) * 1000)}
+    except Exception as e:
+        results['hf_mirror'] = {'status': 'failed', 'error': str(e)}
+        
+    return jsonify(results), 200
+
 if __name__ == '__main__':
     app.run(port=5000, debug=True)
