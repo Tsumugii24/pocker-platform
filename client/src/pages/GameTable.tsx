@@ -15,6 +15,7 @@ import { formatBB, getScenarioLabel } from '@/lib/poker-utils';
 import { generateHoleCards } from '@/lib/range-utils';
 import {
   createSRPGame,
+  createRepeatHandGame,
   createIdleTable,
   getOpponentAction,
   advanceStreet,
@@ -33,7 +34,7 @@ import { HandHistoryDrawer } from '@/components/HandHistoryDrawer';
 import { SettingsDialog } from '@/components/SettingsDialog';
 import { CustomHandDialog } from '@/components/CustomHandDialog';
 import { ActionHistoryPopover } from '@/components/ActionHistoryPopover';
-import { Settings, History, LogOut, Play, User, RotateCcw } from 'lucide-react';
+import { Settings, History, LogOut, Play, User, RotateCcw, SkipForward } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getPlayerSeats, getSeatPosition } from '@/lib/position-utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -51,6 +52,7 @@ interface TableViewProps {
   onStartNew: () => void;
   onRepeatHand: () => void;
   onLeave: () => void;
+  onNextHand: () => void;
 }
 
 function TableView({
@@ -63,10 +65,12 @@ function TableView({
   onStartNew,
   onRepeatHand,
   onLeave,
+  onNextHand,
 }: TableViewProps) {
   const [selectedBet, setSelectedBet] = useState(gameState.pot * 0.5 || 1);
   const [customBetInput, setCustomBetInput] = useState('');
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [showNextConfirm, setShowNextConfirm] = useState(false);
 
   const heroPlayer = gameState.players.find(p => p.isHero);
   const villainPlayer = gameState.players.find(p => !p.isHero && p.isActive && !p.hasFolded);
@@ -342,6 +346,13 @@ function TableView({
           <div className="flex items-center gap-2">
             <div className="text-xs text-gray-400">Hand #{gameState.handNumber}</div>
             <button
+              onClick={() => setShowNextConfirm(true)}
+              className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors"
+              title="Next Hand"
+            >
+              <SkipForward className="w-3 h-3" />
+            </button>
+            <button
               onClick={() => setShowLeaveConfirm(true)}
               className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors"
               title="Leave"
@@ -365,6 +376,16 @@ function TableView({
           >
             <LogOut className="w-4 h-4" />
             Leave
+          </button>
+        )}
+        {/* Next Hand button - bottom right of table area (single view) */}
+        {isSingleView && (
+          <button
+            onClick={() => setShowNextConfirm(true)}
+            className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-[#555555] text-gray-400 hover:text-gray-200 hover:bg-white/5 transition-colors text-sm"
+          >
+            <SkipForward className="w-4 h-4" />
+            Next
           </button>
         )}
         <div className="relative w-full h-full border border-[#333333]" style={{ borderRadius: '50%' }}>
@@ -659,6 +680,32 @@ function TableView({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Next Hand Confirmation Dialog */}
+      <AlertDialog open={showNextConfirm} onOpenChange={setShowNextConfirm}>
+        <AlertDialogContent className="bg-[#0a0a0a] border-[#333333] text-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle>开始下一手</AlertDialogTitle>
+            <AlertDialogDescription className="text-gray-400">
+              当前这手牌尚未结束，确认放弃并直接开始下一手牌吗？
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="border-[#333333] hover:bg-white/5 text-gray-300">
+              取消
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setShowNextConfirm(false);
+                onNextHand();
+              }}
+              className="bg-[#00d084] hover:bg-[#00d084]/90 text-black font-semibold"
+            >
+              确认，开始下一手
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -802,7 +849,9 @@ export default function GameTable() {
   const handleRepeatHand = useCallback((tableIndex: number) => {
     setTables(prev => prev.map((table, i) => {
       if (i !== tableIndex) return table;
-      return createSRPGame(table.handNumber, testConfig, table.initialDeck);
+      // Keep community cards from the previous hand (flop always; turn/river only if dealt).
+      // Re-deal both players' hole cards from scratch.
+      return createRepeatHandGame(table, testConfig);
     }));
   }, [testConfig]);
 
@@ -812,6 +861,21 @@ export default function GameTable() {
     setTables(prev => prev.map((table, i) => {
       if (i !== tableIndex) return table;
       return createIdleTable(table.handNumber, testConfig);
+    }));
+  }, [testConfig]);
+
+  // ─── Next Hand (Leave + Start New combined) ────────────────────────────
+
+  const handleNextHand = useCallback((tableIndex: number) => {
+    if (testConfig.dealMode === 'custom') {
+      setCustomHandTableIndex(tableIndex);
+      setShowCustomHandDialog(true);
+      return;
+    }
+    setTables(prev => prev.map((table, i) => {
+      if (i !== tableIndex) return table;
+      const newHandNumber = table.handNumber + 1;
+      return createSRPGame(newHandNumber, testConfig);
     }));
   }, [testConfig]);
 
@@ -1384,6 +1448,7 @@ export default function GameTable() {
             onStartNew={() => handleStartNew(0)}
             onRepeatHand={() => handleRepeatHand(0)}
             onLeave={() => handleLeave(0)}
+            onNextHand={() => handleNextHand(0)}
           />
         ) : (
           <div className={cn(
@@ -1404,6 +1469,7 @@ export default function GameTable() {
                 onStartNew={() => handleStartNew(index)}
                 onRepeatHand={() => handleRepeatHand(index)}
                 onLeave={() => handleLeave(index)}
+                onNextHand={() => handleNextHand(index)}
               />
             ))}
           </div>

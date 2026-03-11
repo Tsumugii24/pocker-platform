@@ -222,7 +222,7 @@ export function CustomHandDialog({
                             )}>
                                 {solvedStatus
                                     ? "✅ 牌面已解算"
-                                    : "❌ 暂未解算 (AI会使用默认的随机策略)"}
+                                    : "❌ 牌面暂未解算 (AI将采用启发式默认策略)"}
                             </div>
                         )}
 

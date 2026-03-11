@@ -75,16 +75,29 @@ def get_action():
         return jsonify({"error": "Missing action path"}), 400
 
     # Format the board string into standard flop file name, e.g. Ac,Ad,Ah -> AcAdAh
-    flop_board = "".join(board_str.split(',')[:3])
-    data_file = str(gto_dir / f"cache/{flop_board}.parquet")
+    flop_cards = [c.strip() for c in board_str.split(',')[:3]]
+    flop_board = "".join(flop_cards)
+    cache_dir_path = gto_dir / "cache"
+    data_file = str(cache_dir_path / f"{flop_board}.parquet")
     data_path = Path(data_file)
+
+    # 如果直接拼接的顺序找不到文件，枚举 3 张牌的所有排列（共 6 种）在 cache 中查找
+    if not data_path.exists() and len(flop_cards) == 3:
+        import itertools
+        for perm in itertools.permutations(flop_cards):
+            candidate = cache_dir_path / f"{''.join(perm)}.parquet"
+            if candidate.exists():
+                data_file = str(candidate)
+                data_path = candidate
+                flop_board = "".join(perm)
+                print(f"[API Info] Board 顺序重排匹配: {flop_board} (原始: {''.join(flop_cards)})")
+                break
 
     # Parquet 不存在时尝试从 HuggingFace 自动下载
     if not data_path.exists():
         try:
             from download_from_hf import download_board_from_hf
-            cache_dir = str(gto_dir / "cache")
-            downloaded = download_board_from_hf(flop_board, cache_dir=cache_dir, preferred_source=dataset_source)
+            downloaded = download_board_from_hf(flop_board, cache_dir=str(cache_dir_path), preferred_source=dataset_source)
             if downloaded and downloaded.exists():
                 data_file = str(downloaded)
                 data_path = downloaded
@@ -191,20 +204,20 @@ def get_action():
                     res_cfg = _export_turn_config_at_flop_end(querier, path_flop, next_node, card, turn_ranges.get('oop_range') or current_oop_range, turn_ranges.get('ip_range') or current_ip_range)
                     if res_cfg:
                         cfg_p, dump_n = res_cfg
-                        t_json = SCRIPT_DIR / "cache" / "results" / dump_n
+                        t_result = SCRIPT_DIR / "cache" / "results" / dump_n
                         
                         import time
                         wait_start = time.time()
                         waiting_logged = False
-                        while not t_json.exists() and (time.time() - wait_start < 60):
+                        while not t_result.exists() and (time.time() - wait_start < 60):
                              with solve_lock:
-                                 if not t_json.exists() and dump_n not in currently_solving:
+                                 if not t_result.exists() and dump_n not in currently_solving:
                                      currently_solving.add(dump_n)
                                      should_start = True
                                  else:
                                      should_start = False
                              
-                             if t_json.exists(): break
+                             if t_result.exists(): break
                              
                              if should_start:
                                  try:
@@ -219,11 +232,12 @@ def get_action():
                                      waiting_logged = True
                                  time.sleep(1)
 
-                        if t_json.exists():
-                            turn_data = _load_json_with_retry(t_json)
+                        if t_result.exists():
+                            # Use _load_data which supports both JSON and Parquet formats
+                            turn_data = _load_data(t_result)
                             if not turn_data: break
                             querier.data = turn_data
-                            querier.data_path = Path(t_json)
+                            querier.data_path = Path(t_result)
                             querier.config_path = Path(cfg_p)
                             cfg = parse_config(str(cfg_p))
                             querier.board = cfg.get('board', '')
@@ -243,20 +257,20 @@ def get_action():
                     res_cfg = _export_river_config_at_turn_end(querier, path_turn, river_node, card, river_ranges.get('oop_range') or current_oop_range, river_ranges.get('ip_range') or current_ip_range)
                     if res_cfg:
                         cfg_p, dump_n = res_cfg
-                        r_json = SCRIPT_DIR / "cache" / "results" / dump_n
+                        r_result = SCRIPT_DIR / "cache" / "results" / dump_n
                         
                         import time
                         wait_start = time.time()
                         waiting_logged = False
-                        while not r_json.exists() and (time.time() - wait_start < 60):
+                        while not r_result.exists() and (time.time() - wait_start < 60):
                              with solve_lock:
-                                 if not r_json.exists() and dump_n not in currently_solving:
+                                 if not r_result.exists() and dump_n not in currently_solving:
                                      currently_solving.add(dump_n)
                                      should_start = True
                                  else:
                                      should_start = False
                              
-                             if r_json.exists(): break
+                             if r_result.exists(): break
                              
                              if should_start:
                                  try:
@@ -271,11 +285,12 @@ def get_action():
                                      waiting_logged = True
                                  time.sleep(1)
 
-                        if r_json.exists():
-                            river_data = _load_json_with_retry(r_json)
+                        if r_result.exists():
+                            # Use _load_data which supports both JSON and Parquet formats
+                            river_data = _load_data(r_result)
                             if not river_data: break
                             querier.data = river_data
-                            querier.data_path = Path(r_json)
+                            querier.data_path = Path(r_result)
                             querier.config_path = Path(cfg_p)
                             cfg = parse_config(str(cfg_p))
                             querier.board = cfg.get('board', '')

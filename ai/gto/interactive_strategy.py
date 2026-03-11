@@ -245,7 +245,12 @@ def _export_turn_config_at_flop_end(
     # 保留第 6 行到倒数第二行
     if len(lines) > 5:
         new_lines.extend(lines[5:-1])
-    dump_name = out_name.replace(".txt", ".json")
+    # Windows only supports JSON; Linux/macOS supports parquet (no post-processing needed)
+    use_parquet = sys.platform != "win32"
+    dump_ext = ".parquet" if use_parquet else ".json"
+    dump_name = out_name.replace(".txt", dump_ext)
+    if use_parquet:
+        new_lines.append("set_dump_format parquet\n")
     new_lines.append(f"dump_result {dump_name}\n")
 
     is_new = not out_path.exists()
@@ -325,7 +330,12 @@ def _export_river_config_at_turn_end(
     ]
     if len(lines) > 5:
         new_lines.extend(lines[5:-1])
-    dump_name = out_name.replace(".txt", ".json")
+    # Windows only supports JSON; Linux/macOS supports parquet (no post-processing needed)
+    use_parquet = sys.platform != "win32"
+    dump_ext = ".parquet" if use_parquet else ".json"
+    dump_name = out_name.replace(".txt", dump_ext)
+    if use_parquet:
+        new_lines.append("set_dump_format parquet\n")
     new_lines.append(f"dump_result {dump_name}\n")
 
     is_new = not out_path.exists()
@@ -635,11 +645,11 @@ def run_interactive(data_file: str) -> None:
                     output_dir = str(SOLVER_SCRIPT_DIR / "cache" / "results")
                     result = run_solver(str(Path(config_path).resolve()), output_dir=output_dir)
                     if result.get('success'):
-                        turn_json_path = SOLVER_SCRIPT_DIR / "cache" / "results" / dump_name
-                        if turn_json_path.exists():
-                            turn_data = _load_data(turn_json_path)
+                        turn_result_path = SOLVER_SCRIPT_DIR / "cache" / "results" / dump_name
+                        if turn_result_path.exists():
+                            turn_data = _load_data(turn_result_path)
                             querier.data = turn_data
-                            querier.data_path = Path(turn_json_path)
+                            querier.data_path = Path(turn_result_path)
                             querier.config_path = Path(config_path)
                             cfg = parse_config(str(config_path))
                             querier.board = cfg.get('board', '')
@@ -659,9 +669,9 @@ def run_interactive(data_file: str) -> None:
                             current_node = turn_data
                             current_ip_range = turn_ranges.get('ip_range') or current_ip_range
                             current_oop_range = turn_ranges.get('oop_range') or current_oop_range
-                            print(f"[FLOP→TURN] 已加载 turn 策略: {turn_json_path}")
+                            print(f"[FLOP→TURN] 已加载 turn 策略: {turn_result_path}")
                         else:
-                            print(f"[警告] turn 解算完成但未找到输出: {turn_json_path}")
+                            print(f"[警告] turn 解算完成但未找到输出: {turn_result_path}")
                     else:
                         print(f"[警告] turn 解算失败: {result.get('error', 'unknown')}，继续使用 flop 树")
                 elif export_result and not run_solver:
@@ -682,11 +692,11 @@ def run_interactive(data_file: str) -> None:
                     output_dir = str(SOLVER_SCRIPT_DIR / "cache" / "results")
                     result = run_solver(str(Path(config_path).resolve()), output_dir=output_dir)
                     if result.get('success'):
-                        river_json_path = SOLVER_SCRIPT_DIR / "cache" / "results" / dump_name
-                        if river_json_path.exists():
-                            river_data = _load_data(river_json_path)
+                        river_result_path = SOLVER_SCRIPT_DIR / "cache" / "results" / dump_name
+                        if river_result_path.exists():
+                            river_data = _load_data(river_result_path)
                             querier.data = river_data
-                            querier.data_path = Path(river_json_path)
+                            querier.data_path = Path(river_result_path)
                             querier.config_path = Path(config_path)
                             cfg = parse_config(str(config_path))
                             querier.board = cfg.get('board', '')
@@ -706,9 +716,9 @@ def run_interactive(data_file: str) -> None:
                             current_node = river_data
                             current_ip_range = river_ranges.get('ip_range') or current_ip_range
                             current_oop_range = river_ranges.get('oop_range') or current_oop_range
-                            print(f"[TURN→RIVER] 已加载 river 策略: {river_json_path}")
+                            print(f"[TURN→RIVER] 已加载 river 策略: {river_result_path}")
                         else:
-                            print(f"[警告] river 解算完成但未找到输出: {river_json_path}")
+                            print(f"[警告] river 解算完成但未找到输出: {river_result_path}")
                     else:
                         print(f"[警告] river 解算失败: {result.get('error', 'unknown')}，继续使用 turn 树")
                 elif export_result and not run_solver:

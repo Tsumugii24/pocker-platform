@@ -438,6 +438,61 @@ export function createSRPGame(handNumber: number = 1, config?: TestConfig, force
   };
 }
 
+/**
+ * Create a new hand with the same community cards as the previous hand,
+ * but with freshly dealt hole cards for both Hero and Villain.
+ *
+ * - Flop is always preserved (it was always dealt).
+ * - Turn is preserved only if it was actually dealt in the previous hand.
+ * - River is preserved only if it was actually dealt in the previous hand.
+ * - Both players' hole cards are re-dealt randomly (respecting bluff config).
+ */
+export function createRepeatHandGame(prevTable: GameState, config?: TestConfig): GameState {
+  const cfg: TestConfig = config ?? prevTable.config;
+
+  // ── 1. Extract which community cards were actually dealt ──────────────────
+  const flopHistory = prevTable.history.find(h => h.street === 'flop');
+  const turnHistory = prevTable.history.find(h => h.street === 'turn');
+  const riverHistory = prevTable.history.find(h => h.street === 'river');
+
+  // Flop is always dealt (game starts at flop). Fall back to first 3 community cards.
+  const fixedFlop: Card[] = flopHistory?.cards ?? prevTable.communityCards.slice(0, 3);
+
+  // Turn / River only if their StreetHistory entry has cards
+  const fixedTurn: Card | null = turnHistory?.cards?.[0] ?? null;
+  const fixedRiver: Card | null = riverHistory?.cards?.[0] ?? null;
+
+  const fixedCommunity: Card[] = [
+    ...fixedFlop,
+    ...(fixedTurn ? [fixedTurn] : []),
+    ...(fixedRiver ? [fixedRiver] : []),
+  ];
+
+  // ── 2. Build a shuffled deck without the fixed community cards ────────────
+  const isFixed = (c: Card) =>
+    fixedCommunity.some(fc => fc.rank === c.rank && fc.suit === c.suit);
+
+  const availableDeck = shuffleDeck(createDeck().filter(c => !isFixed(c)));
+
+  // ── 3. Deal new hole cards from available deck ────────────────────────────
+  const { heroHole, villainHole, remainingDeck } = generateHoleCards(cfg, fixedCommunity, availableDeck);
+
+  // ── 4. Build forcedDeck: [hero1, hero2, villain1, villain2, flop×3, (turn), (river), ...rest]
+  // createSRPGame reads 2 hero cards, 2 villain cards, then 3 flop cards from the top.
+  // Any subsequent turn/river cards are read from deck as streets advance.
+  // We place fixed turn/river cards right after the flop so they come out in order.
+  const forcedDeck: Card[] = [
+    ...heroHole,
+    ...villainHole,
+    ...fixedFlop,
+    ...(fixedTurn ? [fixedTurn] : []),
+    ...(fixedRiver ? [fixedRiver] : []),
+    ...remainingDeck,
+  ];
+
+  return createSRPGame(prevTable.handNumber, cfg, forcedDeck);
+}
+
 /** Create an idle (empty) table */
 export function createIdleTable(handNumber: number = 0, config?: TestConfig): GameState {
   const cfg: TestConfig = config ?? {

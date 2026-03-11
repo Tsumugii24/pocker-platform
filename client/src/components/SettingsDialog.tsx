@@ -278,7 +278,7 @@ export function SettingsDialog({
           {/* Network Connectivity Test */}
           <div className="border-t border-[#333333] pt-6">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold text-[#00d084]">数据集下载源连通性测试</h3>
+              <h3 className="text-lg font-semibold text-[#00d084]">数据下载源连通性测试</h3>
               <Button
                 onClick={handleNetworkTest}
                 variant="outline"
@@ -294,7 +294,7 @@ export function SettingsDialog({
               {/* HF Official */}
               <div className="flex items-center justify-between bg-[#111] border border-[#333333] rounded-lg p-3">
                 <div>
-                  <Label className="text-sm font-medium">HuggingFace (海外官方站)</Label>
+                  <Label className="text-sm font-medium">HuggingFace (official source)</Label>
                   <p className="text-[10px] text-gray-500">huggingface.co</p>
                 </div>
                 <div className="text-right">
@@ -308,7 +308,7 @@ export function SettingsDialog({
               {/* HF Mirror */}
               <div className="flex items-center justify-between bg-[#111] border border-[#333333] rounded-lg p-3">
                 <div>
-                  <Label className="text-sm font-medium">HF-Mirror (国内镜像站)</Label>
+                  <Label className="text-sm font-medium">HF-Mirror (mainland mirror)</Label>
                   <p className="text-[10px] text-gray-500">hf-mirror.com</p>
                 </div>
                 <div className="text-right">
@@ -318,7 +318,7 @@ export function SettingsDialog({
                   {mirrorTest.status === 'failed' && <span className="text-red-500 text-sm font-semibold truncate max-w-[150px]" title={mirrorTest.error}>失败/超时</span>}
                 </div>
               </div>
-              <p className="text-[10px] text-gray-500 pt-1">注意：当从HuggingFace下载牌面解算数据失败时，会自动尝试镜像源</p>
+              <p className="text-[10px] text-gray-500 pt-1">注意：当从HuggingFace下载数据失败时，会自动尝试镜像源</p>
 
               {/* Dataset Source Selection */}
               <div className="border-t border-[#333333] pt-4 mt-4">
@@ -333,7 +333,7 @@ export function SettingsDialog({
                       onChange={() => setTempTestConfig({ ...tempTestConfig, datasetSource: 'huggingface' })}
                       className="text-[#00d084] focus:ring-[#00d084] bg-[#1a1a1a] border-[#333333]"
                     />
-                    HuggingFace 官方站 (默认)
+                    HuggingFace
                   </label>
                   <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
                     <input
@@ -344,7 +344,7 @@ export function SettingsDialog({
                       onChange={() => setTempTestConfig({ ...tempTestConfig, datasetSource: 'hf-mirror' })}
                       className="text-[#00d084] focus:ring-[#00d084] bg-[#1a1a1a] border-[#333333]"
                     />
-                    HF-Mirror 镜像站 (推荐国内网络直连使用)
+                    HF-Mirror
                   </label>
                 </div>
               </div>
