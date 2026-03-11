@@ -752,6 +752,16 @@ export default function GameTable() {
         if (villain && table.currentPosition !== villain.position) {
           triggerPreSolve(i);
         }
+        // If AI acts first (heroActsFirst === false) and it's the AI's turn at street start,
+        // automatically trigger opponent action on flop start (id changes = new hand)
+        if (
+          villain &&
+          table.currentPosition === villain.position &&
+          table.config.heroActsFirst === false
+        ) {
+          // Use a small delay so state is fully settled before AI acts
+          setTimeout(() => processOpponentAction(i), 800);
+        }
       }
       prevStreetsRef.current[i] = streetKey;
     });
@@ -1346,8 +1356,9 @@ export default function GameTable() {
       // Run out remaining streets automatically
       advanceToNextStreet(table, hero, villain, tableIndex);
     } else {
-      // OOP (BB) acts first
-      table.currentPosition = hero.position; // hero = BB = OOP
+      // OOP (first to act) is hero if heroActsFirst !== false, otherwise villain
+      const oopPlayer = table.config.heroActsFirst !== false ? hero : villain;
+      table.currentPosition = oopPlayer.position;
       // Flop→Turn / Turn→River 时立即触发 pre-solve，不依赖 useEffect 减少延迟
       if ((nextStreet === 'turn' || nextStreet === 'river') && tableIndex !== undefined) {
         triggerPreSolve(tableIndex, table);

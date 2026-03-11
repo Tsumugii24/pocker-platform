@@ -184,7 +184,21 @@ export function SettingsDialog({
                 />
               </div>
 
-              {/* Pot Type */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-sm font-medium">AI 先行动（Hero 担任 IP）</Label>
+                  <p className="text-xs text-gray-500">
+                    开启时，由 AI 率先行动（OOP），Hero 担任后手（IP）
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={tempTestConfig.heroActsFirst === false}
+                  onChange={(e) => setTempTestConfig(prev => ({ ...prev, heroActsFirst: !e.target.checked }))}
+                  className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#00d084]"
+                />
+              </div>
+
               <div className="flex items-center justify-between">
                 <div>
                   <Label className="text-sm font-medium">底池类型</Label>

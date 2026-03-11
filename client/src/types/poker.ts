@@ -42,6 +42,7 @@ export interface TestConfig {
   allowAIBluff?: boolean;
   enableMDF?: boolean; // MDF 防守机制功能开关
   datasetSource?: 'huggingface' | 'hf-mirror'; // 数据集下载源
+  heroActsFirst?: boolean; // true(默认) = Hero是OOP先行动; false = AI是OOP先行动
 }
 
 export const DEFAULT_TEST_CONFIG: TestConfig = {
@@ -54,6 +55,7 @@ export const DEFAULT_TEST_CONFIG: TestConfig = {
   allowPlayerBluff: true,
   allowAIBluff: true,
   enableMDF: false,
+  heroActsFirst: true,
 };
 
 export interface Player {

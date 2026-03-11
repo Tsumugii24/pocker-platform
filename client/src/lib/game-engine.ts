@@ -428,7 +428,7 @@ export function createSRPGame(handNumber: number = 1, config?: TestConfig, force
     deck,
     pot,
     currentStreet: 'flop',
-    currentPosition: 'BB', // OOP acts first postflop
+    currentPosition: cfg.heroActsFirst !== false ? cfg.heroPosition : cfg.villainPosition, // OOP acts first postflop
     effectiveStack: remainingStack,
     history: [preflopHistory, flopHistory],
     handNumber,
@@ -556,8 +556,11 @@ export function resolveShowdown(gameState: GameState): ShowdownResult {
   const villainEval = evaluateHand(villainAll);
   const comparison = compareScores(heroEval.score, villainEval.score);
 
-  // Calculate how much hero invested this hand
-  const heroInvestment = (gameState.config.stackDepthBB - 2.5) - hero.stack + 0; // preflop 2.5 already deducted at start
+  // hero.stack starts at (stackDepthBB - 2.5) after preflop investment of 2.5BB.
+  // Total hero investment = preflop 2.5 + any postflop bets
+  const preflopInvestment = 2.5;
+  const postflopInvestment = (gameState.config.stackDepthBB - preflopInvestment) - hero.stack;
+  const heroTotalInvestment = preflopInvestment + postflopInvestment;
 
   if (comparison > 0) {
     // Hero wins
@@ -566,7 +569,7 @@ export function resolveShowdown(gameState: GameState): ShowdownResult {
       heroHandRank: heroEval.description,
       villainHandRank: villainEval.description,
       potWon: gameState.pot,
-      heroProfit: gameState.pot - (gameState.config.stackDepthBB - 2.5 - hero.stack),
+      heroProfit: gameState.pot - heroTotalInvestment,
     };
   } else if (comparison < 0) {
     // Villain wins
@@ -575,7 +578,7 @@ export function resolveShowdown(gameState: GameState): ShowdownResult {
       heroHandRank: heroEval.description,
       villainHandRank: villainEval.description,
       potWon: gameState.pot,
-      heroProfit: -(gameState.config.stackDepthBB - 2.5 - hero.stack),
+      heroProfit: -heroTotalInvestment,
     };
   } else {
     // Split pot
@@ -584,7 +587,7 @@ export function resolveShowdown(gameState: GameState): ShowdownResult {
       heroHandRank: heroEval.description,
       villainHandRank: villainEval.description,
       potWon: gameState.pot,
-      heroProfit: gameState.pot / 2 - (gameState.config.stackDepthBB - 2.5 - hero.stack),
+      heroProfit: gameState.pot / 2 - heroTotalInvestment,
     };
   }
 }
