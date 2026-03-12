@@ -34,6 +34,7 @@ export function CustomHandDialog({
     const [slots, setSlots] = useState<(Card | null)[]>(Array(slotCount).fill(null));
     const [activeSlot, setActiveSlot] = useState<number>(0);
     const [solvedBoards, setSolvedBoards] = useState<string[]>([]);
+    const [cachedBoards, setCachedBoards] = useState<string[]>([]);
 
     useEffect(() => {
         if (isOpen) {
@@ -49,8 +50,17 @@ export function CustomHandDialog({
                     })
                     .catch(console.error);
             }
+
+            if (cachedBoards.length === 0) {
+                fetch('/api/cached-boards')
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.boards) setCachedBoards(data.boards);
+                    })
+                    .catch(console.error);
+            }
         }
-    }, [isOpen, slotCount, solvedBoards.length]);
+    }, [isOpen, slotCount, solvedBoards.length, cachedBoards.length]);
 
     const handleCardClick = (card: Card) => {
         const isSelectedIdx = slots.findIndex(
@@ -154,14 +164,23 @@ export function CustomHandDialog({
 
         const perms = getFlopPermutations(f1, f2, f3);
         const solvedSet = new Set(solvedBoards);
-        return perms.some(p => solvedSet.has(p));
+        const cachedSet = new Set(cachedBoards);
+        return perms.some(p => solvedSet.has(p) || cachedSet.has(p));
     };
 
     const handleRandomSolvedBoard = () => {
         if (solvedBoards.length === 0) return;
         const rIndex = Math.floor(Math.random() * solvedBoards.length);
-        const boardStr = solvedBoards[rIndex];
+        applyBoard(solvedBoards[rIndex]);
+    };
 
+    const handleRandomCachedBoard = () => {
+        if (cachedBoards.length === 0) return;
+        const rIndex = Math.floor(Math.random() * cachedBoards.length);
+        applyBoard(cachedBoards[rIndex]);
+    };
+
+    const applyBoard = (boardStr: string) => {
         const parseBoardCard = (idx: number): Card => {
             const r = boardStr[idx * 2] as Rank;
             const sChar = boardStr[idx * 2 + 1];
@@ -226,14 +245,24 @@ export function CustomHandDialog({
                             </div>
                         )}
 
-                        <Button
-                            variant="outline"
-                            className="bg-[#1a1a1a] border-[#333333] hover:bg-[#333333] hover:text-white text-gray-300 text-xs py-1 h-8"
-                            onClick={handleRandomSolvedBoard}
-                            disabled={solvedBoards.length === 0}
-                        >
-                            {solvedBoards.length === 0 ? "Loading Solved Boards..." : "🎲 随机选取一个已解算的 Flop"}
-                        </Button>
+                        <div className="flex gap-4">
+                            <Button
+                                variant="outline"
+                                className="bg-[#1a1a1a] border-[#333333] hover:bg-[#333333] hover:text-white text-gray-300 text-xs py-1 h-8"
+                                onClick={handleRandomSolvedBoard}
+                                disabled={solvedBoards.length === 0}
+                            >
+                                {solvedBoards.length === 0 ? "Loading Solved..." : "🎲 随机已解算 Flop"}
+                            </Button>
+                            <Button
+                                variant="outline"
+                                className="bg-[#1a1a1a] border-[#333333] hover:bg-[#333333] hover:text-white text-gray-300 text-xs py-1 h-8"
+                                onClick={handleRandomCachedBoard}
+                                disabled={cachedBoards.length === 0}
+                            >
+                                {cachedBoards.length === 0 ? "No Cache Found" : "🎲 随机已缓存 Flop"}
+                            </Button>
+                        </div>
                     </div>
 
                     {/* Deck Picker */}

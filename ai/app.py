@@ -545,6 +545,21 @@ def get_solved_boards():
     boards = _get_solved_boards_from_hf(source)
     return jsonify({"boards": boards}), 200
 
+@app.route('/api/cached-boards', methods=['GET'])
+def get_cached_boards():
+    """List all .parquet files in the cache directory (excluding configs/results)"""
+    cache_dir_path = gto_dir / "cache"
+    if not cache_dir_path.exists():
+        return jsonify({"boards": []}), 200
+    
+    # Only list .parquet files directly in the cache directory (not in subfolders)
+    boards = []
+    for f in cache_dir_path.glob("*.parquet"):
+        if f.is_file():
+            boards.append(f.stem)
+            
+    return jsonify({"boards": sorted(boards, key=str.lower)}), 200
+
 @app.route('/api/test-hf-connection', methods=['GET'])
 def test_hf_connection():
     import time
