@@ -85,20 +85,22 @@ function TableView({
   // Action availability
   const heroCurrentBet = heroPlayer?.currentBet ?? 0;
   const toCall = currentBet - heroCurrentBet;
-  const villainIsAllin = (villainPlayer?.stack ?? 1) === 0 && (villainPlayer?.currentBet ?? 0) > 0;
+  const heroStack = heroPlayer?.stack ?? 0;
+  const villainIsAllin = (villainPlayer?.stack ?? 1) < 0.01 && (villainPlayer?.currentBet ?? 0) > 0;
   const canCheck = isHeroTurn && toCall === 0;
   const canCall = isHeroTurn && toCall > 0;
   const canBet = isHeroTurn && currentBet === 0;
-  // Cannot raise when villain has gone all-in (no chips left to re-raise against)
-  const canRaise = isHeroTurn && currentBet > 0 && !villainIsAllin;
-  const canFold = isHeroTurn && toCall > 0;
-  const heroStack = heroPlayer?.stack ?? 0;
-  const canAllin = isHeroTurn && heroStack > 0;
 
   // Min bet = 1bb, min raise = current bet + last raise size (at least 1bb more)
   const minBet = 1;
   const minRaiseTotal = currentBet + Math.max(gameState.lastRaiseSize, 1);
   const minRaiseAmount = minRaiseTotal - heroCurrentBet;
+
+  // Cannot raise when villain has gone all-in (no chips left to re-raise against)
+  // or when hero doesn't have enough chips to cover the minimum raise
+  const canRaise = isHeroTurn && currentBet > 0 && !villainIsAllin && heroStack >= minRaiseAmount;
+  const canFold = isHeroTurn && toCall > 0;
+  const canAllin = isHeroTurn && heroStack > 0;
 
   const handleQuickBet = (percentage: number) => {
     const opponentBet = currentBet - heroCurrentBet; // what opponent has bet that we need to call
@@ -1022,17 +1024,18 @@ export default function GameTable() {
         return newTable;
 
       } else if (action === 'bet') {
-        const betAmount = Math.max(1, amount || 1);
-        hero.stack -= betAmount;
-        hero.currentBet += betAmount;
-        newTable.pot += betAmount;
-        newTable.currentBet = hero.currentBet;
-        newTable.lastRaiseSize = betAmount;
+        const totalBet = Math.max(1, amount || 1);
+        const increase = totalBet - hero.currentBet;
+        hero.stack -= increase;
+        hero.currentBet = totalBet;
+        newTable.pot += increase;
+        newTable.currentBet = totalBet;
+        newTable.lastRaiseSize = totalBet;
 
         currentHistory?.actions.push({
           position: hero.position,
           type: 'bet',
-          amount: betAmount,
+          amount: totalBet,
           potAfter: newTable.pot,
           timestamp: new Date(),
         });
@@ -1042,18 +1045,19 @@ export default function GameTable() {
         return newTable;
 
       } else if (action === 'raise') {
-        const raiseAmount = Math.max(1, amount || 1);
-        hero.stack -= raiseAmount;
-        hero.currentBet += raiseAmount;
-        newTable.pot += raiseAmount;
+        const totalRaise = Math.max(1, amount || 1);
+        const increase = totalRaise - hero.currentBet;
+        hero.stack -= increase;
+        hero.currentBet = totalRaise;
+        newTable.pot += increase;
         const raiseIncrease = hero.currentBet - newTable.currentBet;
         newTable.lastRaiseSize = Math.max(newTable.lastRaiseSize, raiseIncrease);
-        newTable.currentBet = hero.currentBet;
+        newTable.currentBet = totalRaise;
 
         currentHistory?.actions.push({
           position: hero.position,
           type: 'raise',
-          amount: hero.currentBet,
+          amount: totalRaise,
           potAfter: newTable.pot,
           timestamp: new Date(),
         });
@@ -1067,22 +1071,36 @@ export default function GameTable() {
         hero.currentBet += allinAmount;
         hero.stack = 0;
         newTable.pot += allinAmount;
-        if (hero.currentBet > newTable.currentBet) {
+
+        const heroIsRaising = hero.currentBet > newTable.currentBet;
+        if (heroIsRaising) {
+          // Hero is raising / betting all-in: villain needs to respond
           const raiseIncrease = hero.currentBet - newTable.currentBet;
           newTable.lastRaiseSize = Math.max(newTable.lastRaiseSize, raiseIncrease);
           newTable.currentBet = hero.currentBet;
+
+          currentHistory?.actions.push({
+            position: hero.position,
+            type: 'allin',
+            amount: hero.currentBet,
+            potAfter: newTable.pot,
+            timestamp: new Date(),
+          });
+
+          newTable.currentPosition = villain.position;
+          pendingOpponentTableRef.current = { tableIndex, table: structuredClone(newTable) };
+        } else {
+          // Hero is calling villain's all-in (bets are now matched) → advance to next street / showdown
+          currentHistory?.actions.push({
+            position: hero.position,
+            type: 'allin',
+            amount: hero.currentBet,
+            potAfter: newTable.pot,
+            timestamp: new Date(),
+          });
+
+          advanceToNextStreet(newTable, hero, villain, tableIndex);
         }
-
-        currentHistory?.actions.push({
-          position: hero.position,
-          type: 'allin',
-          amount: hero.currentBet,
-          potAfter: newTable.pot,
-          timestamp: new Date(),
-        });
-
-        newTable.currentPosition = villain.position;
-        pendingOpponentTableRef.current = { tableIndex, table: structuredClone(newTable) };
         return newTable;
       }
 
@@ -1255,17 +1273,18 @@ export default function GameTable() {
         advanceToNextStreet(newTable, newHero, newVillain, tableIndex);
 
       } else if (decisionApplied.action === 'bet') {
-        const betAmount = decisionApplied.amount || 1;
-        newVillain.stack -= betAmount;
-        newVillain.currentBet += betAmount;
-        newTable.pot += betAmount;
-        newTable.currentBet = newVillain.currentBet;
-        newTable.lastRaiseSize = betAmount;
+        const totalBet = decisionApplied.amount || 1;
+        const increase = totalBet - newVillain.currentBet;
+        newVillain.stack -= increase;
+        newVillain.currentBet = totalBet;
+        newTable.pot += increase;
+        newTable.currentBet = totalBet;
+        newTable.lastRaiseSize = totalBet;
 
         currentHistory?.actions.push({
           position: newVillain.position,
           type: 'bet',
-          amount: betAmount,
+          amount: totalBet,
           potAfter: newTable.pot,
           timestamp: new Date(),
         });
@@ -1273,18 +1292,19 @@ export default function GameTable() {
         newTable.currentPosition = newHero.position;
 
       } else if (decisionApplied.action === 'raise') {
-        const raiseAmount = decisionApplied.amount || 1;
-        newVillain.stack -= raiseAmount;
-        newVillain.currentBet += raiseAmount;
-        newTable.pot += raiseAmount;
+        const totalRaise = decisionApplied.amount || 1;
+        const increase = totalRaise - newVillain.currentBet;
+        newVillain.stack -= increase;
+        newVillain.currentBet = totalRaise;
+        newTable.pot += increase;
         const raiseIncrease = newVillain.currentBet - newTable.currentBet;
         newTable.lastRaiseSize = Math.max(newTable.lastRaiseSize, raiseIncrease);
-        newTable.currentBet = newVillain.currentBet;
+        newTable.currentBet = totalRaise;
 
         currentHistory?.actions.push({
           position: newVillain.position,
           type: 'raise',
-          amount: newVillain.currentBet,
+          amount: totalRaise,
           potAfter: newTable.pot,
           timestamp: new Date(),
         });
