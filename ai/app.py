@@ -173,6 +173,27 @@ def get_action():
                 actions = current_node.get('actions', [])
                 if not actions: break
                 tree_action = _match_action(step, actions)
+                if not tree_action and step.upper().startswith('ALLIN'):
+                    # Normalize ALLIN to the semantically correct tree action:
+                    # - If tree only has CALL (facing an all-in bet) → map to CALL
+                    # - If tree has BET/RAISE → snap to nearest bet/raise action
+                    allin_amount_str = step.split(' ', 1)[1] if ' ' in step else ''
+                    try:
+                        allin_amount = float(allin_amount_str)
+                    except ValueError:
+                        allin_amount = None
+
+                    if 'CALL' in actions and not any(a.startswith('BET') or a.startswith('RAISE') for a in actions if a not in ('CALL', 'FOLD', 'CHECK')):
+                        # Facing all-in: the only aggressive action in tree is CALL → map ALLIN to CALL
+                        tree_action = 'CALL'
+                        print(f"[API Normalize] ALLIN → CALL (available: {actions})")
+                    elif allin_amount is not None:
+                        # Try nearest BET/RAISE match
+                        fake_step = f"RAISE {allin_amount}" if any(a.startswith('RAISE') for a in actions) else f"BET {allin_amount}"
+                        tree_action = _match_action(fake_step, actions)
+                        if tree_action:
+                            print(f"[API Normalize] ALLIN {allin_amount} → {tree_action} (available: {actions})")
+
                 if not tree_action:
                     print(f"[API Error] Action '{step}' not in {actions}")
                     return jsonify({"error": f"Invalid action: {step}"}), 400

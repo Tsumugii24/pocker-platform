@@ -85,10 +85,12 @@ function TableView({
   // Action availability
   const heroCurrentBet = heroPlayer?.currentBet ?? 0;
   const toCall = currentBet - heroCurrentBet;
+  const villainIsAllin = (villainPlayer?.stack ?? 1) === 0 && (villainPlayer?.currentBet ?? 0) > 0;
   const canCheck = isHeroTurn && toCall === 0;
   const canCall = isHeroTurn && toCall > 0;
   const canBet = isHeroTurn && currentBet === 0;
-  const canRaise = isHeroTurn && currentBet > 0;
+  // Cannot raise when villain has gone all-in (no chips left to re-raise against)
+  const canRaise = isHeroTurn && currentBet > 0 && !villainIsAllin;
   const canFold = isHeroTurn && toCall > 0;
   const heroStack = heroPlayer?.stack ?? 0;
   const canAllin = isHeroTurn && heroStack > 0;
@@ -767,6 +769,58 @@ export default function GameTable() {
     });
   }, [tables]);
 
+  /**
+   * Build GTO path from table history, correctly mapping 'allin' actions to
+   * CALL / BET <amount> / RAISE <amount> based on the street's betting context.
+   *
+   * Key issue: when a player calls an all-in they are stored as 'allin' in history,
+   * but the GTO tree node only has 'CALL'. We detect this by replaying currentBet.
+   */
+  const buildGtoPath = useCallback((history: typeof tables[0]['history']): string[] => {
+    const path: string[] = [];
+    history.forEach(round => {
+      if (round.street === 'preflop') return;
+      if (round.street === 'turn' || round.street === 'river') {
+        const cardGot = round.cards?.[0];
+        if (cardGot) path.push(`DEAL:${cardGot.rank}${cardGot.suit[0]}`);
+      }
+      // Track street-level current bet to classify 'allin' as CALL / BET / RAISE
+      let streetCurrentBet = 0;
+      round.actions.forEach(a => {
+        if (a.type === 'bet') {
+          // bet.amount is the incremental bet size
+          streetCurrentBet += a.amount!;
+          path.push(`BET ${a.amount}`);
+        } else if (a.type === 'raise') {
+          // raise.amount is the total bet after raise
+          streetCurrentBet = a.amount!;
+          path.push(`RAISE ${a.amount}`);
+        } else if (a.type === 'allin') {
+          // allin.amount is the actor's total currentBet after going all-in
+          const totalAfterAllin = a.amount ?? 0;
+          if (totalAfterAllin <= streetCurrentBet) {
+            // All-in for less than or equal to current bet → CALL
+            path.push('CALL');
+          } else if (streetCurrentBet === 0) {
+            // First action on street, no prior bet → BET
+            path.push(`BET ${totalAfterAllin}`);
+            streetCurrentBet = totalAfterAllin;
+          } else {
+            // Re-raise situation → RAISE
+            path.push(`RAISE ${totalAfterAllin}`);
+            streetCurrentBet = totalAfterAllin;
+          }
+        } else if (a.type === 'call') {
+          path.push('CALL');
+          // streetCurrentBet stays the same (hero calling matches it)
+        } else {
+          path.push(a.type.toUpperCase()); // CHECK, FOLD
+        }
+      });
+    });
+    return path;
+  }, []);
+
   const triggerPreSolve = useCallback(async (tableIndex: number, tableOverride?: GameState) => {
     const table = tableOverride ?? latestTablesRef.current[tableIndex];
     if (!table || table.phase !== 'playing') return;
@@ -776,21 +830,7 @@ export default function GameTable() {
     const hero = table.players.find(p => p.isHero);
     if (!villain || !hero) return;
 
-    let path: string[] = [];
-    table.history.forEach(round => {
-      if (round.street === 'preflop') return;
-      if (round.street === 'turn' || round.street === 'river') {
-        const cardGot = round.cards?.[0];
-        if (cardGot) path.push(`DEAL:${cardGot.rank}${cardGot.suit[0]}`);
-      }
-      round.actions.forEach(a => {
-        if (a.type === 'bet' || a.type === 'raise' || a.type === 'allin') {
-          path.push(`${a.type.toUpperCase()} ${a.amount}`);
-        } else {
-          path.push(a.type.toUpperCase());
-        }
-      });
-    });
+    let path: string[] = buildGtoPath(table.history);
 
     console.log(`[Pre-solve] Triggering for table ${tableIndex}, path: ${path.join(' -> ')}`);
     try {
@@ -1081,29 +1121,7 @@ export default function GameTable() {
     const boardCards = tableToAct.communityCards.map(c => `${c.rank}${c.suit[0]}`).join(',');
 
     // Construct Path from history
-    let path: string[] = [];
-    tableToAct.history.forEach(round => {
-      // Except preflop!
-      if (round.street === 'preflop') return;
-
-      if (round.street === 'turn' || round.street === 'river') {
-        const cardGot = round.cards?.[0];
-        if (cardGot) {
-          path.push(`DEAL:${cardGot.rank}${cardGot.suit[0]}`);
-        }
-      }
-
-      round.actions.forEach(a => {
-        if (a.type === 'bet' || a.type === 'raise') {
-          path.push(`${a.type.toUpperCase()} ${a.amount}`);
-        } else if (a.type === 'allin') {
-          // GTO maps all in to an amount usually or "ALLIN"
-          path.push(`ALLIN ${a.amount}`);
-        } else {
-          path.push(a.type.toUpperCase());
-        }
-      });
-    });
+    let path: string[] = buildGtoPath(tableToAct.history);
 
     const villainHole = villainInfo.cards ? `${villainInfo.cards[0].rank}${villainInfo.cards[0].suit[0]}${villainInfo.cards[1].rank}${villainInfo.cards[1].suit[0]}` : '';
 
