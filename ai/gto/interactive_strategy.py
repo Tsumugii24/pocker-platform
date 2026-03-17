@@ -55,6 +55,11 @@ def _get_realtime_dump_settings() -> tuple[str, str]:
     return dump_format, dump_ext
 
 
+def _append_dump_config(new_lines: list[str], dump_format: str, dump_name: str) -> None:
+    new_lines.append(f"set_dump_format {dump_format}\n")
+    new_lines.append(f"dump_result {dump_name}\n")
+
+
 def _match_action(user_input: str, available: List[str]) -> Optional[str]:
     """将用户输入匹配到可用动作（支持连续 bet/raise 映射到最近离散选项）"""
     # 优先使用连续→离散映射（真实场景：任意金额映射到最接近的选项）
@@ -258,9 +263,7 @@ def _export_turn_config_at_flop_end(
         new_lines.extend(lines[5:-1])
     dump_format, dump_ext = _get_realtime_dump_settings()
     dump_name = out_name.replace(".txt", dump_ext)
-    if dump_format == "parquet":
-        new_lines.append("set_dump_format parquet\n")
-    new_lines.append(f"dump_result {dump_name}\n")
+    _append_dump_config(new_lines, dump_format, dump_name)
 
     is_new = not out_path.exists()
     with open(out_path, "w", encoding="utf-8") as f:
@@ -347,9 +350,7 @@ def _export_river_config_at_turn_end(
         new_lines.extend(lines[5:-1])
     dump_format, dump_ext = _get_realtime_dump_settings()
     dump_name = out_name.replace(".txt", dump_ext)
-    if dump_format == "parquet":
-        new_lines.append("set_dump_format parquet\n")
-    new_lines.append(f"dump_result {dump_name}\n")
+    _append_dump_config(new_lines, dump_format, dump_name)
 
     is_new = not out_path.exists()
     with open(out_path, "w", encoding="utf-8") as f:
@@ -412,9 +413,7 @@ def _export_turn_config_at_flop_end(
 
     dump_format, dump_ext = _get_realtime_dump_settings()
     dump_name = out_name.replace(".txt", dump_ext)
-    if dump_format == "parquet":
-        new_lines.append("set_dump_format parquet\n")
-    new_lines.append(f"dump_result {dump_name}\n")
+    _append_dump_config(new_lines, dump_format, dump_name)
 
     is_new = not out_path.exists()
     with open(out_path, "w", encoding="utf-8") as f:
@@ -480,9 +479,7 @@ def _export_river_config_at_turn_end(
 
     dump_format, dump_ext = _get_realtime_dump_settings()
     dump_name = out_name.replace(".txt", dump_ext)
-    if dump_format == "parquet":
-        new_lines.append("set_dump_format parquet\n")
-    new_lines.append(f"dump_result {dump_name}\n")
+    _append_dump_config(new_lines, dump_format, dump_name)
 
     is_new = not out_path.exists()
     with open(out_path, "w", encoding="utf-8") as f:
