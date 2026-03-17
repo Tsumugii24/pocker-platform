@@ -529,6 +529,7 @@ def _resolve_strategy_context(context: dict, ai_hand: str) -> dict:
     from interactive_strategy import (
         _get_ev_for_hand,
         _get_probs_for_hand,
+        _pick_hand_from_strategy,
         filter_invalid_raise_actions,
     )
 
@@ -536,6 +537,12 @@ def _resolve_strategy_context(context: dict, ai_hand: str) -> dict:
     actions = current_node.get("actions", [])
     strategy_dict = current_node.get("strategy", {}).get("strategy", {})
     evs_dict = current_node.get("evs", {}).get("evs", {})
+    acting_player = current_node.get("player")
+    acting_range = (
+        context["current_ip_range"]
+        if acting_player == 1
+        else context["current_oop_range"]
+    )
     decision_source = "gto_exact"
     decision_detail = "Used the exact queried hand from the GTO strategy."
     strategy_hand_used = ai_hand
@@ -555,12 +562,18 @@ def _resolve_strategy_context(context: dict, ai_hand: str) -> dict:
     hand_ev_dict = _get_ev_for_hand(ai_hand, evs_dict, actions) or {}
 
     if not probs or len(actions) != len(probs):
-        proxy_hand = random.choice(list(strategy_dict.keys()))
+        proxy_hand = _pick_hand_from_strategy(strategy_dict, acting_range)
+        if not proxy_hand:
+            proxy_hand = random.choice(list(strategy_dict.keys()))
         probs = _get_probs_for_hand(proxy_hand, strategy_dict, actions)
         hand_ev_dict = _get_ev_for_hand(proxy_hand, evs_dict, actions) or {}
         strategy_hand_used = proxy_hand
         decision_source = "gto_proxy_hand"
-        decision_detail = f"Exact hand strategy was unavailable, so a proxy hand was used: {proxy_hand}."
+        acting_side = "IP" if acting_player == 1 else "OOP" if acting_player == 0 else str(acting_player)
+        decision_detail = (
+            f"Exact hand strategy was unavailable, so a proxy hand was selected "
+            f"from the acting player's {acting_side} range: {proxy_hand}."
+        )
 
     if not probs or len(actions) != len(probs):
         return {
