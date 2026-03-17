@@ -4,6 +4,7 @@ import copy
 import functools
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,9 @@ PROJECT_ROOT = AI_DIR.parent
 RUNTIME_CONFIG_PATH = AI_DIR / "runtime_config.json"
 
 DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
+    "solver": {
+        "realtime_dump_format": "auto",
+    },
     "llm": {
         "river_exploit": {
             "model": "Qwen/Qwen3.5-27B",
@@ -92,6 +96,27 @@ def get_openai_credentials() -> tuple[str | None, str | None]:
 def get_river_exploit_config() -> dict[str, Any]:
     config = load_runtime_config()
     return copy.deepcopy(config["llm"]["river_exploit"])
+
+
+def get_solver_config() -> dict[str, Any]:
+    config = load_runtime_config()
+    return copy.deepcopy(config["solver"])
+
+
+def get_realtime_solver_dump_format(platform_name: str | None = None) -> str:
+    config = get_solver_config()
+    raw_value = str(config.get("realtime_dump_format", "auto")).strip().lower()
+    if raw_value not in {"auto", "json", "parquet"}:
+        raise RuntimeError(
+            "solver.realtime_dump_format must be one of: auto, json, parquet."
+        )
+
+    current_platform = platform_name or sys.platform
+    if raw_value == "auto":
+        return "json" if current_platform == "win32" else "parquet"
+    if raw_value == "parquet" and current_platform == "win32":
+        return "json"
+    return raw_value
 
 
 def get_download_config() -> dict[str, Any]:

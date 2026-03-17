@@ -17,7 +17,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
 current_dir = Path(__file__).parent
+ai_dir = current_dir.parent
 sys.path.insert(0, str(current_dir))
+if str(ai_dir) not in sys.path:
+    sys.path.insert(0, str(ai_dir))
 
 from query_action_line import (
     ActionLineQuery,
@@ -43,6 +46,13 @@ from continuous_action_mapping import (
     filter_invalid_raise_actions,
 )
 from convert_range_format import dict_to_range_string
+from runtime_config import get_realtime_solver_dump_format
+
+
+def _get_realtime_dump_settings() -> tuple[str, str]:
+    dump_format = get_realtime_solver_dump_format(sys.platform)
+    dump_ext = ".parquet" if dump_format == "parquet" else ".json"
+    return dump_format, dump_ext
 
 
 def _match_action(user_input: str, available: List[str]) -> Optional[str]:
@@ -246,11 +256,9 @@ def _export_turn_config_at_flop_end(
     # 保留第 6 行到倒数第二行
     if len(lines) > 5:
         new_lines.extend(lines[5:-1])
-    # Windows only supports JSON; Linux/macOS supports parquet (no post-processing needed)
-    use_parquet = sys.platform != "win32"
-    dump_ext = ".parquet" if use_parquet else ".json"
+    dump_format, dump_ext = _get_realtime_dump_settings()
     dump_name = out_name.replace(".txt", dump_ext)
-    if use_parquet:
+    if dump_format == "parquet":
         new_lines.append("set_dump_format parquet\n")
     new_lines.append(f"dump_result {dump_name}\n")
 
@@ -337,11 +345,9 @@ def _export_river_config_at_turn_end(
     ]
     if len(lines) > 5:
         new_lines.extend(lines[5:-1])
-    # Windows only supports JSON; Linux/macOS supports parquet (no post-processing needed)
-    use_parquet = sys.platform != "win32"
-    dump_ext = ".parquet" if use_parquet else ".json"
+    dump_format, dump_ext = _get_realtime_dump_settings()
     dump_name = out_name.replace(".txt", dump_ext)
-    if use_parquet:
+    if dump_format == "parquet":
         new_lines.append("set_dump_format parquet\n")
     new_lines.append(f"dump_result {dump_name}\n")
 
@@ -404,10 +410,9 @@ def _export_turn_config_at_flop_end(
     if len(lines) > 5:
         new_lines.extend(lines[5:-1])
 
-    use_parquet = sys.platform != "win32"
-    dump_ext = ".parquet" if use_parquet else ".json"
+    dump_format, dump_ext = _get_realtime_dump_settings()
     dump_name = out_name.replace(".txt", dump_ext)
-    if use_parquet:
+    if dump_format == "parquet":
         new_lines.append("set_dump_format parquet\n")
     new_lines.append(f"dump_result {dump_name}\n")
 
@@ -473,10 +478,9 @@ def _export_river_config_at_turn_end(
     if len(lines) > 5:
         new_lines.extend(lines[5:-1])
 
-    use_parquet = sys.platform != "win32"
-    dump_ext = ".parquet" if use_parquet else ".json"
+    dump_format, dump_ext = _get_realtime_dump_settings()
     dump_name = out_name.replace(".txt", dump_ext)
-    if use_parquet:
+    if dump_format == "parquet":
         new_lines.append("set_dump_format parquet\n")
     new_lines.append(f"dump_result {dump_name}\n")
 

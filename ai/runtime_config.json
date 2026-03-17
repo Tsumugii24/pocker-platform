@@ -1,4 +1,7 @@
 {
+  "solver": {
+    "realtime_dump_format": "auto"
+  },
   "llm": {
     "river_exploit": {
       "model": "Qwen/Qwen3.5-27B",

@@ -32,6 +32,8 @@ export function SettingsDialog({
   onTestConfigChange,
 }: SettingsDialogProps) {
   const isTestFeatureEnabled = import.meta.env.DEV || import.meta.env.VITE_ENABLE_TEST_FEATURES === 'true';
+  const checkboxClassName = 'h-5 w-5 shrink-0 rounded border-[#333333] bg-[#1a1a1a] accent-[#00d084]';
+  const testFeatureCheckboxClassName = `${checkboxClassName} accent-[#ff8c00] disabled:cursor-not-allowed disabled:opacity-50`;
   const [tempSizes, setTempSizes] = useState<number[]>(quickBetSizes);
   const [tempTestConfig, setTempTestConfig] = useState<TestConfig>(normalizeTestConfig(testConfig));
 
@@ -136,7 +138,7 @@ export function SettingsDialog({
                       type="checkbox"
                       checked={!!tempTestConfig.customHoleCards}
                       onChange={(e) => setTempTestConfig(prev => ({ ...prev, customHoleCards: e.target.checked }))}
-                      className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#00d084]"
+                      className={checkboxClassName}
                     />
                   </div>
                 )}
@@ -153,7 +155,7 @@ export function SettingsDialog({
                   type="checkbox"
                   checked={tempTestConfig.allowPlayerBluff ?? true}
                   onChange={(e) => setTempTestConfig(prev => ({ ...prev, allowPlayerBluff: e.target.checked }))}
-                  className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#00d084]"
+                  className={checkboxClassName}
                 />
               </div>
 
@@ -168,7 +170,7 @@ export function SettingsDialog({
                   type="checkbox"
                   checked={tempTestConfig.allowAIBluff ?? true}
                   onChange={(e) => setTempTestConfig(prev => ({ ...prev, allowAIBluff: e.target.checked }))}
-                  className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#00d084]"
+                  className={checkboxClassName}
                 />
               </div>
 
@@ -183,7 +185,7 @@ export function SettingsDialog({
                   type="checkbox"
                   checked={!!tempTestConfig.enableMDF}
                   onChange={(e) => setTempTestConfig(prev => ({ ...prev, enableMDF: e.target.checked }))}
-                  className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#00d084]"
+                  className={checkboxClassName}
                 />
               </div>
 
@@ -198,7 +200,7 @@ export function SettingsDialog({
                   type="checkbox"
                   checked={tempTestConfig.heroActsFirst === false}
                   onChange={(e) => setTempTestConfig(prev => normalizeTestConfig({ ...prev, heroActsFirst: !e.target.checked }))}
-                  className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#00d084]"
+                  className={checkboxClassName}
                 />
               </div>
 
@@ -355,7 +357,7 @@ export function SettingsDialog({
                   checked={isTestFeatureEnabled && (tempTestConfig.showFaceUpOpponentCards ?? false)}
                   disabled={!isTestFeatureEnabled}
                   onChange={(e) => setTempTestConfig(prev => ({ ...prev, showFaceUpOpponentCards: e.target.checked }))}
-                  className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#ff8c00] disabled:opacity-50 disabled:cursor-not-allowed"
+                  className={testFeatureCheckboxClassName}
                 />
               </div>
 
@@ -376,7 +378,7 @@ export function SettingsDialog({
                   checked={isTestFeatureEnabled && (tempTestConfig.showAIDecisionNotes ?? false)}
                   disabled={!isTestFeatureEnabled}
                   onChange={(e) => setTempTestConfig(prev => ({ ...prev, showAIDecisionNotes: e.target.checked }))}
-                  className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#ff8c00] disabled:opacity-50 disabled:cursor-not-allowed"
+                  className={testFeatureCheckboxClassName}
                 />
               </div>
 
@@ -397,7 +399,7 @@ export function SettingsDialog({
                   checked={isTestFeatureEnabled && (tempTestConfig.enableRiverLLMExploit ?? false)}
                   disabled={!isTestFeatureEnabled}
                   onChange={(e) => setTempTestConfig(prev => ({ ...prev, enableRiverLLMExploit: e.target.checked }))}
-                  className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#ff8c00] disabled:opacity-50 disabled:cursor-not-allowed"
+                  className={testFeatureCheckboxClassName}
                 />
               </div>
 
@@ -422,7 +424,7 @@ export function SettingsDialog({
                     }
                     disabled={!isTestFeatureEnabled || !(tempTestConfig.enableRiverLLMExploit ?? false)}
                     onChange={(e) => setTempTestConfig(prev => ({ ...prev, enableRiverLLMReasoning: e.target.checked }))}
-                    className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#ff8c00] disabled:opacity-50 disabled:cursor-not-allowed"
+                    className={testFeatureCheckboxClassName}
                   />
                 </div>
               </div>
@@ -471,7 +473,7 @@ export function SettingsDialog({
                   type="checkbox"
                   checked={tempTestConfig.showOpponentCards ?? true}
                   onChange={(e) => setTempTestConfig(prev => ({ ...prev, showOpponentCards: e.target.checked }))}
-                  className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#00d084]"
+                  className={checkboxClassName}
                 />
               </div>
 
