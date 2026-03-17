@@ -1,0 +1,34 @@
+{
+  "llm": {
+    "river_exploit": {
+      "model": "Qwen/Qwen3.5-27B",
+      "timeout_seconds": 60,
+      "extra_body": {
+        "enable_thinking": true
+      }
+    }
+  },
+  "downloads": {
+    "dataset_repo": "Tsumugii/sia-100bb",
+    "default_source": "huggingface",
+    "mirror_source": "hf-mirror",
+    "backup_source": "backup",
+    "sources": {
+      "huggingface": {
+        "label": "HuggingFace",
+        "endpoint": null,
+        "enabled": true
+      },
+      "hf-mirror": {
+        "label": "HF-Mirror",
+        "endpoint": "https://hf-mirror.com",
+        "enabled": true
+      },
+      "backup": {
+        "label": "Backup Source",
+        "endpoint": null,
+        "enabled": false
+      }
+    }
+  }
+}

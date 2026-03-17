@@ -2,6 +2,7 @@ import json
 import csv
 import random
 import sys
+import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -24,16 +25,19 @@ except ImportError:
     def _expand_range_to_hands(r, b): return r
 
 
+_LOGGED_CONFIG_SUMMARIES = set()
+
+
 def _load_data(path: Path) -> Dict[str, Any]:
-    """从 JSON 或 Parquet 文件加载策略树数据"""
+    """Load solver tree data from JSON or Parquet."""
     path = Path(path)
     if path.suffix.lower() == '.parquet':
         if pq is None:
-            raise RuntimeError("请安装 pyarrow: pip install pyarrow")
+            raise RuntimeError("Please install pyarrow: pip install pyarrow")
         table = pq.read_table(path)
         records = table.to_pylist()
         if not records:
-            raise ValueError(f"Parquet 文件为空: {path}")
+            raise ValueError(f"Parquet file is empty: {path}")
         raw = records[0].get("data")
         return json.loads(raw) if isinstance(raw, str) else raw
     else:
@@ -41,7 +45,17 @@ def _load_data(path: Path) -> Dict[str, Any]:
             return json.load(f)
 
 
-def _load_json_with_retry(path: Path, max_retries: int = 10, retry_delay: float = 2.0) -> Dict[str, Any]:
+def _should_retry_load_error(err: Exception) -> bool:
+    if isinstance(err, RuntimeError):
+        return False
+    if isinstance(err, (json.JSONDecodeError, FileNotFoundError, PermissionError, OSError)):
+        return True
+    if isinstance(err, ValueError) and "parquet" in str(err).lower():
+        return True
+    return type(err).__name__.startswith("Arrow")
+
+
+def _load_data_with_retry(path: Path, max_retries: int = 10, retry_delay: float = 2.0) -> Dict[str, Any]:
     """
     加载 solver 输出的 JSON，在文件可能仍在写入时重试。
     用于解决多请求并发时，solver 尚未写完即被读取导致的 JSONDecodeError。
@@ -50,15 +64,21 @@ def _load_json_with_retry(path: Path, max_retries: int = 10, retry_delay: float 
     last_err = None
     for attempt in range(max_retries):
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except json.JSONDecodeError as e:
+            return _load_data(path)
+        except Exception as e:
             last_err = e
+            if not _should_retry_load_error(e):
+                raise
             if attempt < max_retries - 1:
-                import time
+                print(f"[Load Retry] {path.name} not ready yet ({attempt + 1}/{max_retries}): {e}")
                 time.sleep(retry_delay)
             else:
                 raise last_err
+
+
+def _load_json_with_retry(path: Path, max_retries: int = 10, retry_delay: float = 2.0) -> Dict[str, Any]:
+    """Backward-compatible alias for callers that still reference the old JSON-specific helper."""
+    return _load_data_with_retry(path, max_retries=max_retries, retry_delay=retry_delay)
 
 
 def calc_pot_along_path(path_actions: List[str], initial_pot: float, effective_stack: float) -> Tuple[float, float, float]:
@@ -151,14 +171,21 @@ class ActionLineQuery:
                         elif line.startswith('set_effective_stack'):
                             self.effective_stack = float(line.split()[1])
                 
-                print(f"Loaded config: Board={self.board}, Pot={self.initial_pot}, Stack={self.effective_stack}")
+                config_key = str(self.config_path.resolve())
+                if config_key not in _LOGGED_CONFIG_SUMMARIES:
+                    print(
+                        f"[Config] Loaded tree config: {self.config_path.name} | "
+                        f"initial_pot={self.initial_pot:.1f} BB | "
+                        f"effective_stack={self.effective_stack:.1f} BB"
+                    )
+                    _LOGGED_CONFIG_SUMMARIES.add(config_key)
             except Exception as e:
-                print(f"Error loading config: {e}")
+                print(f"[Config Error] Failed to load config metadata: {e}")
 
     def load(self):
         fmt = "Parquet" if self.data_path.suffix.lower() == '.parquet' else "JSON"
         print(f"Loading {fmt}: {self.data_path}")
-        self.data = _load_data(self.data_path)
+        self.data = _load_data_with_retry(self.data_path)
         print(f"{fmt} loaded.")
 
     def _parse_action_line(self, action_line_str: str) -> List[str]:
@@ -371,7 +398,7 @@ class ActionLineQuery:
         node, path, ip_range, oop_range = result
         rows = self._extract_node_data(node, path, ip_range, oop_range)
         if not rows:
-            print("该节点没有策略数据（可能不是 action_node）。")
+            print("This node has no strategy data. It may not be an action node.")
             return
 
         # 查找目标手牌（支持正反顺序，如 4h5h 和 5h4h）
@@ -384,11 +411,11 @@ class ActionLineQuery:
                 break
 
         if target is None:
-            print(f"未找到手牌 [{hand}]。")
+            print(f"Hand [{hand}] was not found.")
             available = [r['hand'] for r in rows]
             similar = [h for h in available if hand[0:2] in h or hand[2:4] in h] if len(hand) == 4 else []
             if similar:
-                print(f"  相近手牌: {similar[:10]}")
+                print(f"  Similar hands: {similar[:10]}")
             return
 
         # 计算底池
@@ -482,7 +509,7 @@ class ActionLineQuery:
         # 提取完整数据并导出 CSV
         rows = self._extract_node_data(node, path, ip_range, oop_range)
         if not rows:
-            print("该节点没有策略数据可导出（可能不是 action_node）。")
+            print("This node has no strategy data to export. It may not be an action node.")
             return
 
         self._export_csv(rows, output_csv)
@@ -519,8 +546,8 @@ class ActionLineQuery:
                 })
                 count += 1
 
-        print(f"\n[OK] CSV 导出完成: {output_csv}")
-        print(f"  共 {count} 条策略数据（手牌）")
+        print(f"\n[OK] CSV export completed: {output_csv}")
+        print(f"  Exported {count} strategy rows (hands)")
 
     def _print_node_info(self, node, path, ip_range, oop_range):
         """打印节点摘要信息"""
@@ -708,7 +735,7 @@ def main(data_file: str, action_line: str = None, hand: str = None, output_csv: 
                 hand = random.choice(list(strategy_dict.keys()))
                 print(f"Random hand: {hand}")
             else:
-                print("该节点没有策略数据，无法随机选手牌。")
+                print("This node has no strategy data, so a random hand cannot be selected.")
                 return
 
     if hand:

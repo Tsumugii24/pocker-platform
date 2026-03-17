@@ -22,6 +22,7 @@ sys.path.insert(0, str(current_dir))
 from query_action_line import (
     ActionLineQuery,
     _load_data,
+    _load_data_with_retry,
     _auto_detect_config,
 )
 try:
@@ -221,7 +222,7 @@ def _export_turn_config_at_flop_end(
 
     template_path = current_dir / "docs" / "turn_config.txt"
     if not template_path.exists():
-        print(f"[警告] turn_config 模板不存在: {template_path}")
+        print(f"[Warning] Turn config template not found: {template_path}")
         return None
 
     with open(template_path, "r", encoding="utf-8") as f:
@@ -258,8 +259,14 @@ def _export_turn_config_at_flop_end(
         f.writelines(new_lines)
 
     if is_new:
-        print(f"[FLOP→TURN] 已生成 turn 配置: {out_path}")
-        print(f"  Pot={pot:.0f}, EffectiveStack={eff_stack:.0f}, Board={new_board}")
+        print(f"[Flop->Turn] Generated turn solver config: {out_path}")
+        print(f"  board={new_board}, pot={pot:.0f} BB, effective_stack={eff_stack:.0f} BB")
+        return (out_path, dump_name)
+        print(f"[Flop->Turn] Generated turn solver config: {out_path}")
+        print(f"  board={new_board}, pot={pot:.0f} BB, effective_stack={eff_stack:.0f} BB")
+        return (out_path, dump_name)
+        print(f"[Flop->Turn] Generated turn solver config: {out_path}")
+        print(f"  board={new_board}, pot={pot:.0f} BB, effective_stack={eff_stack:.0f} BB")
     return (out_path, dump_name)
 
 
@@ -308,7 +315,7 @@ def _export_river_config_at_turn_end(
 
     template_path = current_dir / "docs" / "river_config.txt"
     if not template_path.exists():
-        print(f"[警告] river_config 模板不存在: {template_path}")
+        print(f"[Warning] River config template not found: {template_path}")
         return None
 
     with open(template_path, "r", encoding="utf-8") as f:
@@ -343,8 +350,143 @@ def _export_river_config_at_turn_end(
         f.writelines(new_lines)
 
     if is_new:
-        print(f"[TURN→RIVER] 已生成 river 配置: {out_path}")
-        print(f"  Pot={pot:.0f}, EffectiveStack={eff_stack:.0f}, Board={new_board}")
+        print(f"[Turn->River] Generated river solver config: {out_path}")
+        print(f"  board={new_board}, pot={pot:.0f} BB, effective_stack={eff_stack:.0f} BB")
+    return (out_path, dump_name)
+
+
+def _export_turn_config_at_flop_end(
+    querier: ActionLineQuery,
+    path_flop: List[str],
+    turn_node: Dict,
+    turn_card: str,
+    oop_range: Dict[str, float],
+    ip_range: Dict[str, float],
+    output_dir: Optional[Path] = None,
+) -> Optional[Tuple[Path, str]]:
+    if turn_node.get("node_type") == "terminal":
+        return None
+
+    pot, oop_added, ip_added = _calc_street_state(path_flop, querier.initial_pot)
+    remaining_oop = querier.effective_stack - oop_added
+    remaining_ip = querier.effective_stack - ip_added
+    eff_stack = min(remaining_oop, remaining_ip)
+
+    board_base = (querier.board or "").strip()
+    board_list = [c.strip() for c in board_base.split(",") if c.strip()]
+    new_board = ",".join(board_list + [turn_card]) if board_list else turn_card
+
+    oop_str = dict_to_range_string(oop_range) if oop_range else ""
+    ip_str = dict_to_range_string(ip_range) if ip_range else ""
+
+    template_path = current_dir / "docs" / "turn_config.txt"
+    if not template_path.exists():
+        print(f"[Warning] Turn config template not found: {template_path}")
+        return None
+
+    with open(template_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    path_suffix = "_".join(path_flop[:3]) if len(path_flop) >= 3 else "_".join(path_flop)
+    path_suffix = "".join(c for c in path_suffix if c.isalnum() or c in " _")[:40].replace(" ", "_")
+    out_name = f"turn_config_{path_suffix}_{turn_card}.txt"
+    out_dir = output_dir or (current_dir / "cache" / "configs")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / out_name
+
+    new_lines = [
+        f"set_pot {int(round(pot))}\n",
+        f"set_effective_stack {int(round(eff_stack))}\n",
+        f"set_board {new_board}\n",
+        f"set_range_oop {oop_str}\n",
+        f"set_range_ip {ip_str}\n",
+    ]
+    if len(lines) > 5:
+        new_lines.extend(lines[5:-1])
+
+    use_parquet = sys.platform != "win32"
+    dump_ext = ".parquet" if use_parquet else ".json"
+    dump_name = out_name.replace(".txt", dump_ext)
+    if use_parquet:
+        new_lines.append("set_dump_format parquet\n")
+    new_lines.append(f"dump_result {dump_name}\n")
+
+    is_new = not out_path.exists()
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
+
+    if is_new:
+        print(f"[Flop->Turn] Generated turn solver config: {out_path}")
+        print(f"  board={new_board}, pot={pot:.0f} BB, effective_stack={eff_stack:.0f} BB")
+    return (out_path, dump_name)
+
+
+def _export_river_config_at_turn_end(
+    querier: ActionLineQuery,
+    path_turn: List[str],
+    river_node: Dict,
+    river_card: str,
+    oop_range: Dict[str, float],
+    ip_range: Dict[str, float],
+    output_dir: Optional[Path] = None,
+) -> Optional[Tuple[Path, str]]:
+    if river_node.get("node_type") == "terminal":
+        return None
+
+    path_turn_local, _ = _get_path_and_initial_for_pot(
+        path_turn, 4, querier.initial_pot, querier.effective_stack
+    )
+    pot, oop_added, ip_added = _calc_street_state(path_turn_local, querier.initial_pot)
+    remaining_oop = querier.effective_stack - oop_added
+    remaining_ip = querier.effective_stack - ip_added
+    eff_stack = min(remaining_oop, remaining_ip)
+
+    board_base = (querier.board or "").strip()
+    board_list = [c.strip() for c in board_base.split(",") if c.strip()]
+    new_board = ",".join(board_list + [river_card]) if board_list else river_card
+
+    oop_str = dict_to_range_string(oop_range) if oop_range else ""
+    ip_str = dict_to_range_string(ip_range) if ip_range else ""
+
+    template_path = current_dir / "docs" / "river_config.txt"
+    if not template_path.exists():
+        print(f"[Warning] River config template not found: {template_path}")
+        return None
+
+    with open(template_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    path_suffix = "_".join(path_turn[:5]) if len(path_turn) >= 5 else "_".join(path_turn)
+    path_suffix = "".join(c for c in path_suffix if c.isalnum() or c in " _")[:50].replace(" ", "_")
+    out_name = f"river_config_{path_suffix}_{river_card}.txt"
+    out_dir = output_dir or (current_dir / "cache" / "configs")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / out_name
+
+    new_lines = [
+        f"set_pot {int(round(pot))}\n",
+        f"set_effective_stack {int(round(eff_stack))}\n",
+        f"set_board {new_board}\n",
+        f"set_range_oop {oop_str}\n",
+        f"set_range_ip {ip_str}\n",
+    ]
+    if len(lines) > 5:
+        new_lines.extend(lines[5:-1])
+
+    use_parquet = sys.platform != "win32"
+    dump_ext = ".parquet" if use_parquet else ".json"
+    dump_name = out_name.replace(".txt", dump_ext)
+    if use_parquet:
+        new_lines.append("set_dump_format parquet\n")
+    new_lines.append(f"dump_result {dump_name}\n")
+
+    is_new = not out_path.exists()
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
+
+    if is_new:
+        print(f"[Turn->River] Generated river solver config: {out_path}")
+        print(f"  board={new_board}, pot={pot:.0f} BB, effective_stack={eff_stack:.0f} BB")
     return (out_path, dump_name)
 
 
@@ -368,7 +510,7 @@ def _infer_flop_board_from_path(data_path: Path) -> str:
 def _print_leaf_terminal(path_display: List[str], reason: str) -> None:
     """当树中没有显式 terminal 子节点时，按叶子节点展示结束信息。"""
     print("\n" + "=" * 60)
-    print("对局结束 (Leaf)")
+    print("Hand Complete (Leaf)")
     print(f"Path: ROOT -> {' -> '.join(path_display) if path_display else '(root)'}")
     print(f"Reason: {reason}")
     print("=" * 60)
@@ -402,11 +544,11 @@ def run_interactive(data_file: str) -> None:
     ai_oop_hand: Optional[str] = None
 
     print("\n" + "=" * 60)
-    print("交互式策略查询 | Player (IP) 先手 vs AI (OOP)")
+    print("Interactive Strategy Query | Player (IP) acts first vs AI (OOP)")
     print("=" * 60)
-    print(f"Board: {querier.board or '(从文件名推断)'}")
+    print(f"Board: {querier.board or '(inferred from file name)'}")
     print(f"Pot: {querier.initial_pot}, Stack: {querier.effective_stack}")
-    print("输入 'q' 退出 | 支持任意 bet/raise 金额，将自动映射到最接近的离散选项")
+    print("Type 'q' to quit | Any bet/raise size will be mapped to the nearest discrete action")
     print("=" * 60)
 
     while True:
@@ -429,7 +571,7 @@ def run_interactive(data_file: str) -> None:
             evs_dict = evs_info.get('evs', {}) if isinstance(evs_info, dict) else {}
 
             if not actions or not strategy_dict:
-                print("[终端] 无更多决策")
+                print("[Terminal] No further decision is available.")
                 break
 
             is_player_turn = player == 1  # Player = IP (树根先手), AI = OOP
@@ -473,32 +615,32 @@ def run_interactive(data_file: str) -> None:
             )
             pot, _, _ = _calc_street_state(path_for_pot, init_pot)
             street = _get_street(path_display, board_count)
-            role = "IP (你)" if is_player_turn else "OOP (AI)"
+            role = "IP (You)" if is_player_turn else "OOP (AI)"
 
             print(f"\n--- {street.upper()} | {role} | Pot={pot:.0f} ---")
             print(f"Path: ROOT -> {' -> '.join(path_display) if path_display else '(root)'}")
             if path_tree != path_display or filtered_out:
                 print(f"Query path: ROOT -> {' -> '.join(path_tree) if path_tree else '(root)'}")
             if filtered_out:
-                print(f"（已过滤 {filtered_out}：金额 <= call {effective_call_amount:.0f}）")
+                print(f"(Filtered out {filtered_out}: amount <= call {effective_call_amount:.0f})")
             print(f"Hand: {hand}")
             print(f"Actions: {actions}")
 
             # 展示策略概率
             if filtered_out:
-                print("\nStrategy (查询原始):")
+                print("\nStrategy (raw node data):")
                 for act, p in zip(orig_actions, orig_probs):
                     bar = '#' * int(p * 20)
                     ev_str = f"  EV={orig_ev_dict[act]:+.3f}" if orig_ev_dict and act in orig_ev_dict else ""
-                    mark = " [已过滤]" if act in filtered_out else ""
+                    mark = " [filtered]" if act in filtered_out else ""
                     print(f"  {act:<25} {p:>6.1%}  {bar}{ev_str}{mark}")
-                print("\nStrategy (过滤后):")
+                print("\nStrategy (after filtering):")
                 for act, p in zip(actions, probs):
                     bar = '#' * int(p * 20)
                     ev_str = f"  EV={ev_dict[act]:+.3f}" if ev_dict and act in ev_dict else ""
                     print(f"  {act:<25} {p:>6.1%}  {bar}{ev_str}")
             else:
-                print("\nStrategy (概率):")
+                print("\nStrategy (probabilities):")
                 for act, p in zip(actions, probs):
                     bar = '#' * int(p * 20)
                     ev_str = f"  EV={ev_dict[act]:+.3f}" if ev_dict and act in ev_dict else ""
@@ -508,12 +650,12 @@ def run_interactive(data_file: str) -> None:
                 # Player 手动输入
                 while True:
                     try:
-                        user = input("\n你的选择 > ").strip()
+                        user = input("\nYour action > ").strip()
                     except (EOFError, KeyboardInterrupt):
-                        print("\n退出")
+                        print("\nExiting")
                         return
                     if user.lower() in ('q', 'quit', 'exit'):
-                        print("退出")
+                        print("Exiting")
                         return
                     tree_action = _match_action(user, actions)
                     if tree_action:
@@ -528,7 +670,7 @@ def run_interactive(data_file: str) -> None:
                             effective_call_amount = 0.0
                         action = tree_action
                         break
-                    print(f"无效输入，可选: {actions}")
+                    print(f"Invalid input. Available actions: {actions}")
             else:
                 use_mdf = False
                 if street == 'flop' and effective_call_amount > 0 and path_display:
@@ -568,23 +710,23 @@ def run_interactive(data_file: str) -> None:
                         threshold = pot_before * mdf 
                         
                         print("\n" + "=" * 40)
-                        print("--- MDF 防守流程开始 ---")
-                        print(f"触发条件: 面临 {'Bet' if is_bet else 'Raise'} (下注金额 {effective_call_amount:.0f} / 下注前底池 {pot_before:.0f} = {proportion:.2f})")
-                        print(f"根据公式计算 MDF: {pot_before:.0f} / ({pot_before:.0f} + {effective_call_amount:.0f}) = {mdf:.3f}")
-                        print(f"原始 Fold EV: {fold_ev:.3f}")
-                        print("调整后各动作 EV (基准 Fold EV=0):")
+                        print("--- MDF Override Evaluation Started ---")
+                        print(f"Trigger: facing a {'Bet' if is_bet else 'Raise'} ({effective_call_amount:.0f} into {pot_before:.0f} = {proportion:.2f})")
+                        print(f"MDF formula: {pot_before:.0f} / ({pot_before:.0f} + {effective_call_amount:.0f}) = {mdf:.3f}")
+                        print(f"Fold EV baseline: {fold_ev:.3f}")
+                        print("Adjusted EVs (fold normalized to 0):")
                         for a in actions:
                             print(f"  {a}: {adjusted_evs.get(a, 0.0):.3f}")
-                        print(f"\n评价防守: 下注前 Pot = {pot_before:.0f}")
-                        print(f"防守阈值 (Pot(前) * MDF): {pot_before:.0f} * {mdf:.3f} = {threshold:.3f}")
+                        print(f"\nDefend evaluation: pot-before-call = {pot_before:.0f}")
+                        print(f"Defend threshold (pot-before-call * MDF): {pot_before:.0f} * {mdf:.3f} = {threshold:.3f}")
                         
                         if max_defend_ev >= threshold:
                             action = call_action
-                            print(f"判断结果: 存在防守 EV ({max_defend_ev:.3f}) >= 阈值，选择 {action}!")
+                            print(f"Decision: defend, because {max_defend_ev:.3f} >= {threshold:.3f}. Choosing {action}.")
                         else:
                             action = fold_action
-                            print(f"判断结果: 防守 EV ({max_defend_ev:.3f}) < 阈值，放弃防守，选择 {action}!")
-                        print("--- MDF 防守流程结束 ---")
+                            print(f"Decision: fold, because {max_defend_ev:.3f} < {threshold:.3f}. Choosing {action}.")
+                        print("--- MDF Override Evaluation Finished ---")
                         print("=" * 40)
                     else:
                         use_mdf = False
@@ -593,7 +735,7 @@ def run_interactive(data_file: str) -> None:
                     # AI (OOP) 按概率权重随机选择（非选最高）
                     action = _sample_action_by_probs(actions, probs)
                     chosen_prob = next((p for a, p in zip(actions, probs) if a == action), 0)
-                    print(f"\nAI 选择: {action} ({chosen_prob:.1%} 概率，按权重随机抽样)")
+                    print(f"\nAI Choice: {action} ({chosen_prob:.1%} probability, sampled by weight)")
                     
                 path_display.append(action)
                 # AI 的 bet/raise 更新 effective_call_amount；CHECK/CALL/FOLD 则清零
@@ -615,7 +757,7 @@ def run_interactive(data_file: str) -> None:
         elif node_type == 'chance_node':
             dealcards = current_node.get('dealcards', {})
             if not dealcards:
-                print("[终端]")
+                print("[Terminal]")
                 break
             is_flop_to_turn = board_count == 3 and _get_street(path_display, board_count) == 'flop'
             is_turn_to_river = board_count == 4  # turn 配置下遇到 chance_node 即发 river
@@ -623,7 +765,7 @@ def run_interactive(data_file: str) -> None:
             path_tree.append(f"DEAL:{card}")
             path_display.append(f"DEAL:{card}")
             effective_call_amount = 0.0  # 新街重置
-            print(f"\n--- 发牌: {card} ---")
+            print(f"\n--- Deal: {card} ---")
             next_node = dealcards[card]
             if not next_node:
                 _print_leaf_terminal(path_display, "no further child node after deal")
@@ -641,13 +783,13 @@ def run_interactive(data_file: str) -> None:
                 )
                 if export_result and run_solver:
                     config_path, dump_name = export_result
-                    print(f"\n[FLOP→TURN] 正在运行 turn 解算...")
+                    print(f"\n[Flop->Turn] Running realtime turn solve...")
                     output_dir = str(SOLVER_SCRIPT_DIR / "cache" / "results")
                     result = run_solver(str(Path(config_path).resolve()), output_dir=output_dir)
                     if result.get('success'):
                         turn_result_path = SOLVER_SCRIPT_DIR / "cache" / "results" / dump_name
                         if turn_result_path.exists():
-                            turn_data = _load_data(turn_result_path)
+                            turn_data = _load_data_with_retry(turn_result_path)
                             querier.data = turn_data
                             querier.data_path = Path(turn_result_path)
                             querier.config_path = Path(config_path)
@@ -669,13 +811,13 @@ def run_interactive(data_file: str) -> None:
                             current_node = turn_data
                             current_ip_range = turn_ranges.get('ip_range') or current_ip_range
                             current_oop_range = turn_ranges.get('oop_range') or current_oop_range
-                            print(f"[FLOP→TURN] 已加载 turn 策略: {turn_result_path}")
+                            print(f"[Flop->Turn] Loaded turn strategy: {turn_result_path}")
                         else:
-                            print(f"[警告] turn 解算完成但未找到输出: {turn_result_path}")
+                            print(f"[Warning] Turn solve completed but no output file was found: {turn_result_path}")
                     else:
-                        print(f"[警告] turn 解算失败: {result.get('error', 'unknown')}，继续使用 flop 树")
+                        print(f"[Warning] Turn solve failed: {result.get('error', 'unknown')}. Continuing with the flop tree.")
                 elif export_result and not run_solver:
-                    print("[警告] run_solver 不可用，无法运行 turn 解算")
+                    print("[Warning] run_solver is unavailable, so the turn solve cannot be started.")
 
             # TURN→RIVER：导出 river 配置、跑 river 解算、切换为 river JSON
             elif is_turn_to_river and next_node.get('node_type') != 'terminal':
@@ -688,13 +830,13 @@ def run_interactive(data_file: str) -> None:
                 )
                 if export_result and run_solver:
                     config_path, dump_name = export_result
-                    print(f"\n[TURN→RIVER] 正在运行 river 解算...")
+                    print(f"\n[Turn->River] Running realtime river solve...")
                     output_dir = str(SOLVER_SCRIPT_DIR / "cache" / "results")
                     result = run_solver(str(Path(config_path).resolve()), output_dir=output_dir)
                     if result.get('success'):
                         river_result_path = SOLVER_SCRIPT_DIR / "cache" / "results" / dump_name
                         if river_result_path.exists():
-                            river_data = _load_data(river_result_path)
+                            river_data = _load_data_with_retry(river_result_path)
                             querier.data = river_data
                             querier.data_path = Path(river_result_path)
                             querier.config_path = Path(config_path)
@@ -716,52 +858,52 @@ def run_interactive(data_file: str) -> None:
                             current_node = river_data
                             current_ip_range = river_ranges.get('ip_range') or current_ip_range
                             current_oop_range = river_ranges.get('oop_range') or current_oop_range
-                            print(f"[TURN→RIVER] 已加载 river 策略: {river_result_path}")
+                            print(f"[Turn->River] Loaded river strategy: {river_result_path}")
                         else:
-                            print(f"[警告] river 解算完成但未找到输出: {river_result_path}")
+                            print(f"[Warning] River solve completed but no output file was found: {river_result_path}")
                     else:
-                        print(f"[警告] river 解算失败: {result.get('error', 'unknown')}，继续使用 turn 树")
+                        print(f"[Warning] River solve failed: {result.get('error', 'unknown')}. Continuing with the turn tree.")
                 elif export_result and not run_solver:
-                    print("[警告] run_solver 不可用，无法运行 river 解算")
+                    print("[Warning] run_solver is unavailable, so the river solve cannot be started.")
 
         elif node_type == 'terminal':
             value = current_node.get('value', 0)
             print("\n" + "=" * 60)
-            print("对局结束 (Terminal)")
+            print("Hand Complete (Terminal)")
             print(f"Path: ROOT -> {' -> '.join(path_display)}")
             print(f"Value: {value}")
             print("=" * 60)
             break
         else:
-            print(f"[未知节点类型: {node_type}]")
+            print(f"[Unknown node type: {node_type}]")
             break
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="交互式策略查询: Player (IP) vs AI (OOP)")
-    parser.add_argument("data", nargs="?", default="cache/Ac2c2d.parquet",
-                        help="JSON 或 Parquet 策略文件")
+    parser = argparse.ArgumentParser(description="Interactive strategy query: Player (IP) vs AI (OOP)")
+    parser.add_argument("data", nargs="?", default="cache/dataset/Ac2c2d.parquet",
+                        help="JSON or Parquet strategy file")
     args = parser.parse_args()
 
     data_path = Path(args.data)
     if not data_path.exists():
         if data_path.suffix.lower() == ".parquet":
-            print(f"文件不存在，尝试从 HuggingFace 下载: {data_path.stem}")
+            print(f"File not found. Attempting download from HuggingFace: {data_path.stem}")
             try:
                 from download_from_hf import download_board_from_hf
-                cache_dir = str(data_path.parent) if data_path.parent != Path(".") else "cache"
+                cache_dir = str(data_path.parent) if data_path.parent != Path(".") else "cache/dataset"
                 downloaded = download_board_from_hf(data_path.stem, cache_dir=cache_dir)
                 if downloaded and downloaded.exists():
                     data_path = downloaded
-                    print(f"已下载: {data_path}")
+                    print(f"Downloaded: {data_path}")
                 else:
-                    print(f"[错误] 文件不存在且下载失败: {data_path}")
+                    print(f"[Error] File is missing and the download failed: {data_path}")
                     sys.exit(1)
             except ImportError:
-                print(f"[错误] 文件不存在: {data_path}（需安装 huggingface_hub 以支持自动下载）")
+                print(f"[Error] File is missing: {data_path} (install huggingface_hub to enable automatic downloads)")
                 sys.exit(1)
         else:
-            print(f"[错误] 文件不存在: {data_path}")
+            print(f"[Error] File is missing: {data_path}")
             sys.exit(1)
 
     run_interactive(str(data_path))

@@ -9,7 +9,19 @@ import type {
   TestConfig,
   ShowdownResult,
 } from '@/types/poker';
+import {
+  FRONTEND_HAND_HISTORY_CONFIG,
+  FRONTEND_TABLE_CONFIG,
+} from '@/config/frontend-config';
+import { handHistoryKey } from './auth';
 import { generateHoleCards } from './range-utils';
+import { normalizeTestConfig } from './test-config';
+
+function getInitialActionActor(position: Position, config: TestConfig): 'hero' | 'ai' | 'other' {
+  if (position === config.heroPosition) return 'hero';
+  if (position === config.villainPosition) return 'ai';
+  return 'other';
+}
 
 // ─── Card Utilities ──────────────────────────────────────────────────────────
 
@@ -284,7 +296,10 @@ export function getOpponentAction(
     } else {
       // Bet between 33%-100% of pot
       const betFraction = 0.33 + random * 0.67;
-      let betAmount = Math.max(1, Math.round(pot * betFraction * 2) / 2); // round to 0.5
+      let betAmount = Math.max(
+        FRONTEND_TABLE_CONFIG.minimumBetSizeBb,
+        Math.round(pot * betFraction * 2) / 2,
+      ); // round to 0.5
       if (betAmount >= opponentStack) {
         return { action: 'allin', amount: opponentStack };
       }
@@ -330,12 +345,12 @@ export function getOpponentAction(
  * Postflop: BB (OOP) acts first on every street.
  */
 export function createSRPGame(handNumber: number = 1, config?: TestConfig, forcedDeck?: Card[]): GameState {
-  const cfg: TestConfig = config ?? {
+  const cfg: TestConfig = normalizeTestConfig(config ?? {
     heroPosition: 'BB',
     villainPosition: 'UTG',
     potType: 'SRP',
     stackDepthBB: 100,
-  };
+  });
 
   const initialDeck = forcedDeck ? [...forcedDeck] : shuffleDeck(createDeck());
   let deck = [...initialDeck];
@@ -367,16 +382,21 @@ export function createSRPGame(handNumber: number = 1, config?: TestConfig, force
   const remainingStack = cfg.stackDepthBB - preflopInvestment;
   const sbDeadMoney = 0.5;
   const pot = sbDeadMoney + preflopInvestment * 2; // 0.5 + 5 = 5.5
+  const seatCards: Partial<Record<Position, [Card, Card]>> = {
+    [cfg.heroPosition]: heroCards,
+    [cfg.villainPosition]: villainCards,
+  };
+  const activePositions = new Set<Position>([cfg.heroPosition, cfg.villainPosition]);
 
   const players: Player[] = [
     {
       position: 'UTG',
-      stack: remainingStack,
-      cards: villainCards as [Card, Card],
-      isActive: true,
-      hasFolded: false,
+      stack: activePositions.has('UTG') ? remainingStack : cfg.stackDepthBB,
+      cards: seatCards.UTG,
+      isActive: activePositions.has('UTG'),
+      hasFolded: !activePositions.has('UTG'),
       currentBet: 0,
-      isHero: false,
+      isHero: cfg.heroPosition === 'UTG',
     },
     { position: 'HJ', stack: cfg.stackDepthBB, isHero: false, isActive: false, hasFolded: true, currentBet: 0 },
     { position: 'CO', stack: cfg.stackDepthBB, isHero: false, isActive: false, hasFolded: true, currentBet: 0 },
@@ -384,31 +404,26 @@ export function createSRPGame(handNumber: number = 1, config?: TestConfig, force
     { position: 'SB', stack: cfg.stackDepthBB - sbDeadMoney, isHero: false, isActive: false, hasFolded: true, currentBet: 0 },
     {
       position: 'BB',
-      stack: remainingStack,
-      cards: heroCards as [Card, Card],
-      isActive: true,
-      hasFolded: false,
+      stack: activePositions.has('BB') ? remainingStack : cfg.stackDepthBB,
+      cards: seatCards.BB,
+      isActive: activePositions.has('BB'),
+      hasFolded: !activePositions.has('BB'),
       currentBet: 0,
-      isHero: false,
+      isHero: cfg.heroPosition === 'BB',
     },
   ];
-
-  // Mark hero correctly
-  for (const p of players) {
-    p.isHero = p.position === cfg.heroPosition;
-  }
 
   // Preflop history
   const preflopHistory: StreetHistory = {
     street: 'preflop',
     potBefore: 1.5,
     actions: [
-      { position: 'UTG', type: 'raise', amount: 2.5, potAfter: 4, timestamp: new Date() },
-      { position: 'HJ', type: 'fold', potAfter: 4, timestamp: new Date() },
-      { position: 'CO', type: 'fold', potAfter: 4, timestamp: new Date() },
-      { position: 'BTN', type: 'fold', potAfter: 4, timestamp: new Date() },
-      { position: 'SB', type: 'fold', potAfter: 4, timestamp: new Date() },
-      { position: 'BB', type: 'call', amount: 1.5, potAfter: 5.5, timestamp: new Date() },
+      { position: 'UTG', type: 'raise', amount: 2.5, potAfter: 4, timestamp: new Date(), actor: getInitialActionActor('UTG', cfg) },
+      { position: 'HJ', type: 'fold', potAfter: 4, timestamp: new Date(), actor: getInitialActionActor('HJ', cfg) },
+      { position: 'CO', type: 'fold', potAfter: 4, timestamp: new Date(), actor: getInitialActionActor('CO', cfg) },
+      { position: 'BTN', type: 'fold', potAfter: 4, timestamp: new Date(), actor: getInitialActionActor('BTN', cfg) },
+      { position: 'SB', type: 'fold', potAfter: 4, timestamp: new Date(), actor: getInitialActionActor('SB', cfg) },
+      { position: 'BB', type: 'call', amount: 1.5, potAfter: 5.5, timestamp: new Date(), actor: getInitialActionActor('BB', cfg) },
     ],
   };
 
@@ -495,12 +510,12 @@ export function createRepeatHandGame(prevTable: GameState, config?: TestConfig):
 
 /** Create an idle (empty) table */
 export function createIdleTable(handNumber: number = 0, config?: TestConfig): GameState {
-  const cfg: TestConfig = config ?? {
+  const cfg: TestConfig = normalizeTestConfig(config ?? {
     heroPosition: 'BB',
     villainPosition: 'UTG',
     potType: 'SRP',
     stackDepthBB: 100,
-  };
+  });
 
   const players: Player[] = [
     { position: 'UTG', stack: cfg.stackDepthBB, isHero: false, isActive: false, hasFolded: false, currentBet: 0 },
@@ -508,7 +523,7 @@ export function createIdleTable(handNumber: number = 0, config?: TestConfig): Ga
     { position: 'CO', stack: cfg.stackDepthBB, isHero: false, isActive: false, hasFolded: false, currentBet: 0 },
     { position: 'BTN', stack: cfg.stackDepthBB, isHero: false, isActive: false, hasFolded: false, currentBet: 0 },
     { position: 'SB', stack: cfg.stackDepthBB, isHero: false, isActive: false, hasFolded: false, currentBet: 0 },
-    { position: 'BB', stack: cfg.stackDepthBB, isHero: true, isActive: false, hasFolded: false, currentBet: 0 },
+    { position: 'BB', stack: cfg.stackDepthBB, isHero: false, isActive: false, hasFolded: false, currentBet: 0 },
   ];
 
   for (const p of players) {
@@ -606,7 +621,7 @@ export function saveHandToHistory(
   history: StreetHistory[],
   username: string = 'default',
 ): void {
-  const key = `poker_hand_history_${username}`;
+  const key = handHistoryKey(username);
   const stored = localStorage.getItem(key);
   const hands: HandRecord[] = stored ? JSON.parse(stored) : [];
 
@@ -625,6 +640,8 @@ export function saveHandToHistory(
   };
 
   hands.unshift(handRecord);
-  if (hands.length > 1000) hands.splice(1000);
+  if (hands.length > FRONTEND_HAND_HISTORY_CONFIG.maxSavedHandsPerUser) {
+    hands.splice(FRONTEND_HAND_HISTORY_CONFIG.maxSavedHandsPerUser);
+  }
   localStorage.setItem(key, JSON.stringify(hands));
 }

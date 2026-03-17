@@ -9,7 +9,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import type { GameState, Player, StreetHistory, TestConfig, ShowdownResult, Card } from '@/types/poker';
+import type { Action, GameState, Player, StreetHistory, TestConfig, ShowdownResult, Card } from '@/types/poker';
 import { DEFAULT_TEST_CONFIG } from '@/types/poker';
 import { formatBB, getScenarioLabel } from '@/lib/poker-utils';
 import { generateHoleCards } from '@/lib/range-utils';
@@ -34,11 +34,22 @@ import { HandHistoryDrawer } from '@/components/HandHistoryDrawer';
 import { SettingsDialog } from '@/components/SettingsDialog';
 import { CustomHandDialog } from '@/components/CustomHandDialog';
 import { ActionHistoryPopover } from '@/components/ActionHistoryPopover';
+import { ActionHistory } from '@/components/ActionHistory';
+import { EMPTY_RIVER_EXPLOIT_TRACE, RiverExploitSidebar } from '@/components/RiverExploitSidebar';
+import type { RiverExploitTrace } from '@/components/RiverExploitSidebar';
 import { Settings, History, LogOut, Play, User, RotateCcw, SkipForward } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getPlayerSeats, getSeatPosition } from '@/lib/position-utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { handHistoryKey, quickBetSizesKey, testConfigKey } from '@/lib/auth';
+import { normalizeTestConfig } from '@/lib/test-config';
+import type { ReactNode } from 'react';
+import {
+  FRONTEND_LAYOUT_CONFIG,
+  FRONTEND_RIVER_EXPLOIT_CONFIG,
+  FRONTEND_STORAGE_CONFIG,
+  FRONTEND_TABLE_CONFIG,
+} from '@/config/frontend-config';
 
 // ─── TableView Component ─────────────────────────────────────────────────────
 
@@ -48,6 +59,11 @@ interface TableViewProps {
   tableNumber: number;
   isSingleView: boolean;
   quickBetSizes: number[];
+  showOpponentCards: boolean;
+  showFaceUpOpponentCards: boolean;
+  showAIDecisionNotes: boolean;
+  showRiverExploitSidebar: boolean;
+  riverExploitTrace: RiverExploitTrace;
   onAction: (action: 'check' | 'fold' | 'call' | 'bet' | 'raise' | 'allin', amount?: number) => void;
   onStartNew: () => void;
   onRepeatHand: () => void;
@@ -61,16 +77,35 @@ function TableView({
   tableNumber,
   isSingleView,
   quickBetSizes,
+  showOpponentCards,
+  showFaceUpOpponentCards,
+  showAIDecisionNotes,
+  showRiverExploitSidebar,
+  riverExploitTrace,
   onAction,
   onStartNew,
   onRepeatHand,
   onLeave,
   onNextHand,
 }: TableViewProps) {
-  const [selectedBet, setSelectedBet] = useState(gameState.pot * 0.5 || 1);
+  const [selectedBet, setSelectedBet] = useState(
+    gameState.pot * 0.5 || FRONTEND_TABLE_CONFIG.minimumBetSizeBb,
+  );
   const [customBetInput, setCustomBetInput] = useState('');
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [showNextConfirm, setShowNextConfirm] = useState(false);
+  const [isActionHistoryOpen, setIsActionHistoryOpen] = useState(
+    () =>
+      isSingleView &&
+      (
+        typeof window === 'undefined' ||
+        window.innerWidth >= FRONTEND_LAYOUT_CONFIG.desktopSidebarAutoOpenBreakpointPx
+      )
+  );
+  const [isRiverExploitOpen, setIsRiverExploitOpen] = useState(false);
+  const tableAreaClasses = isSingleView
+    ? FRONTEND_LAYOUT_CONFIG.singleViewTableAreaClasses
+    : FRONTEND_LAYOUT_CONFIG.multiViewTableAreaClasses;
 
   const heroPlayer = gameState.players.find(p => p.isHero);
   const villainPlayer = gameState.players.find(p => !p.isHero && p.isActive && !p.hasFolded);
@@ -78,6 +113,36 @@ function TableView({
   const currentBet = gameState.currentBet;
   const isHeroTurn = gameState.currentPosition === heroPlayer?.position;
   const phase = gameState.phase;
+
+  useEffect(() => {
+    if (
+      showRiverExploitSidebar &&
+      (
+        riverExploitTrace.status === 'loading' ||
+        riverExploitTrace.status === 'streaming' ||
+        riverExploitTrace.action ||
+        riverExploitTrace.error ||
+        riverExploitTrace.finalMarkdown ||
+        riverExploitTrace.systemMarkdown ||
+        riverExploitTrace.userMarkdown ||
+        riverExploitTrace.reasoningMarkdown ||
+        riverExploitTrace.warning
+      )
+    ) {
+      setIsRiverExploitOpen(true);
+    }
+  }, [
+    riverExploitTrace.action,
+    riverExploitTrace.error,
+    riverExploitTrace.finalMarkdown,
+    riverExploitTrace.reasoningSupported,
+    riverExploitTrace.reasoningMarkdown,
+    riverExploitTrace.status,
+    riverExploitTrace.systemMarkdown,
+    riverExploitTrace.userMarkdown,
+    riverExploitTrace.warning,
+    showRiverExploitSidebar,
+  ]);
 
   // Map players to visual seats
   const playerSeats = getPlayerSeats(gameState.players);
@@ -92,8 +157,11 @@ function TableView({
   const canBet = isHeroTurn && currentBet === 0;
 
   // Min bet = 1bb, min raise = current bet + last raise size (at least 1bb more)
-  const minBet = 1;
-  const minRaiseTotal = currentBet + Math.max(gameState.lastRaiseSize, 1);
+  const minBet = FRONTEND_TABLE_CONFIG.minimumBetSizeBb;
+  const minRaiseTotal = currentBet + Math.max(
+    gameState.lastRaiseSize,
+    FRONTEND_TABLE_CONFIG.minimumRaiseIncrementBb,
+  );
   const minRaiseAmount = minRaiseTotal - heroCurrentBet;
 
   // Cannot raise when villain has gone all-in (no chips left to re-raise against)
@@ -150,10 +218,40 @@ function TableView({
     }
   };
 
+  const renderWithSidebar = (content: ReactNode, showSidebar: boolean = true) => {
+    if (!isSingleView || !showSidebar) {
+      return content;
+    }
+
+    return (
+      <div className="flex h-full min-h-0">
+        <ActionHistory
+          handId={gameState.id}
+          history={gameState.history}
+          currentStreet={gameState.currentStreet}
+          phase={gameState.phase}
+          isOpen={isActionHistoryOpen}
+          onToggle={() => setIsActionHistoryOpen(prev => !prev)}
+          showAIDecisionNotes={showAIDecisionNotes}
+        />
+        <div className="min-w-0 flex-1">
+          {content}
+        </div>
+        {showRiverExploitSidebar && (
+          <RiverExploitSidebar
+            trace={riverExploitTrace}
+            isOpen={isRiverExploitOpen}
+            onToggle={() => setIsRiverExploitOpen(prev => !prev)}
+          />
+        )}
+      </div>
+    );
+  };
+
   // ─── Idle View ───────────────────────────────────────────────────────────
 
   if (phase === 'idle') {
-    return (
+    return renderWithSidebar((
       <div className={cn('flex flex-col', !isSingleView && 'border-r border-b border-[#333333]')}>
         {!isSingleView && (
           <div className="h-8 border-b border-[#333333] flex items-center justify-between px-3">
@@ -162,7 +260,7 @@ function TableView({
         )}
         <div className={cn(
           'relative flex items-center justify-center',
-          isSingleView ? 'h-[600px] p-8' : 'h-[360px] p-6'
+          tableAreaClasses,
         )}>
           <div className="relative w-full h-full border border-[#333333]" style={{ borderRadius: '50%' }}>
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-4">
@@ -211,7 +309,7 @@ function TableView({
           </Button>
         </div>
       </div>
-    );
+    ), false);
   }
 
   // ─── Showdown View ───────────────────────────────────────────────────────
@@ -221,7 +319,7 @@ function TableView({
     const heroWon = result?.winnerId === heroPlayer?.position;
     const isSplit = result?.winnerId === null;
 
-    return (
+    return renderWithSidebar((
       <div className={cn('flex flex-col', !isSingleView && 'border-r border-b border-[#333333]')}>
         {!isSingleView && (
           <div className="h-8 border-b border-[#333333] flex items-center justify-between px-3">
@@ -231,7 +329,7 @@ function TableView({
         )}
         <div className={cn(
           'relative flex items-center justify-center',
-          isSingleView ? 'h-[600px] p-8' : 'h-[360px] p-6'
+          tableAreaClasses,
         )}>
           <div className="relative w-full h-full border border-[#333333]" style={{ borderRadius: '50%' }}>
             {/* Center: result */}
@@ -242,7 +340,11 @@ function TableView({
 
               <div className={cn('font-bold flex items-center gap-2', isSingleView ? 'text-3xl' : 'text-xl')}>
                 Pot: {formatBB(pot)}
-                <ActionHistoryPopover history={gameState.history} isSingleView={isSingleView} />
+                <ActionHistoryPopover
+                  history={gameState.history}
+                  isSingleView={isSingleView}
+                  showAIDecisionNotes={showAIDecisionNotes}
+                />
               </div>
 
               {/* Community Cards */}
@@ -281,7 +383,9 @@ function TableView({
             {playerSeats.map(({ player, seatIndex }) => {
               const position = getSeatPosition(seatIndex, isSingleView);
               const isHero = player.isHero;
-              const showCards = (isHero || (player.isActive && !player.hasFolded)) && player.cards;
+              const showCards =
+                !!player.cards &&
+                (isHero || (!isHero && showOpponentCards && (player.isActive || player.hasFolded)));
               const cardSize = isSingleView ? (isHero ? 'large' : 'medium') : 'small';
 
               return (
@@ -336,12 +440,12 @@ function TableView({
           )}
         </div>
       </div>
-    );
+    ));
   }
 
   // ─── Playing View ────────────────────────────────────────────────────────
 
-  return (
+  return renderWithSidebar((
     <div className={cn('flex flex-col', !isSingleView && 'border-r border-b border-[#333333]')}>
       {/* Table Header (multi-table only) */}
       {!isSingleView && (
@@ -370,7 +474,7 @@ function TableView({
       {/* Poker Table */}
       <div className={cn(
         'relative flex items-center justify-center',
-        isSingleView ? 'h-[600px] p-8' : 'h-[360px] p-6'
+        tableAreaClasses,
       )}>
         {/* Leave button - top right of table area (single view) */}
         {isSingleView && (
@@ -429,7 +533,11 @@ function TableView({
             <div className={cn('text-gray-400 flex items-center gap-2', isSingleView ? 'text-xs mt-2' : 'text-[10px] mt-1')}>
               <div className={cn('rounded-full bg-gray-600', isSingleView ? 'w-4 h-4' : 'w-3 h-3')} />
               {formatBB(pot)}
-              <ActionHistoryPopover history={gameState.history} isSingleView={isSingleView} />
+              <ActionHistoryPopover
+                history={gameState.history}
+                isSingleView={isSingleView}
+                showAIDecisionNotes={showAIDecisionNotes}
+              />
             </div>
 
             {/* Current bet info */}
@@ -453,12 +561,19 @@ function TableView({
             const isHero = player.isHero;
             const cardSize = isSingleView ? (isHero ? 'large' : 'medium') : 'small';
             const gap = isSingleView ? 'gap-3' : 'gap-1';
+            const revealOpponentCardsInPlay =
+              showFaceUpOpponentCards && !isHero && player.isActive && !player.hasFolded && !!player.cards;
 
             return (
               <div key={player.position} className="absolute" style={position}>
                 <div className={cn('flex flex-col items-center', gap)}>
                   <PlayerPosition player={player} size={isSingleView ? undefined : 'small'} />
                   {isHero && player.cards ? (
+                    <div className={cn('flex', isSingleView ? 'gap-2' : 'gap-1')}>
+                      <PokerCard card={player.cards[0]} size={cardSize} />
+                      <PokerCard card={player.cards[1]} size={cardSize} />
+                    </div>
+                  ) : revealOpponentCardsInPlay && player.cards ? (
                     <div className={cn('flex', isSingleView ? 'gap-2' : 'gap-1')}>
                       <PokerCard card={player.cards[0]} size={cardSize} />
                       <PokerCard card={player.cards[1]} size={cardSize} />
@@ -711,38 +826,150 @@ function TableView({
         </AlertDialogContent>
       </AlertDialog>
     </div>
-  );
+  ));
 }
 
 // ─── Main GameTable Component ────────────────────────────────────────────────
 
+function getActiveVillain(gameState: GameState) {
+  return gameState.players.find(p => !p.isHero && p.isActive && !p.hasFolded);
+}
+
+type OpponentDecision = {
+  action: Action['type'];
+  amount?: number;
+  decisionSource?: string;
+  decisionDetail?: string;
+};
+
+type RiverExploitEvent =
+  | { type: 'status'; status?: string; message?: string }
+  | { type: 'system_markdown'; content?: string }
+  | { type: 'user_markdown'; content?: string }
+  | { type: 'meta'; model?: string; decision_mode?: string; reasoning_supported?: boolean }
+  | { type: 'reasoning_delta'; content?: string }
+  | { type: 'final_delta'; content?: string }
+  | { type: 'parsed_output'; strategy?: Record<string, number> }
+  | {
+      type: 'decision';
+      action?: string;
+      strategy?: Record<string, number>;
+      decision_source?: string;
+      decision_detail?: string;
+      strategy_hand_used?: string;
+    }
+  | { type: 'warning'; message?: string }
+  | { type: 'error'; message?: string }
+  | { type: 'complete'; status?: string };
+
+const RIVER_REASONING_TIMEOUT_MS = FRONTEND_RIVER_EXPLOIT_CONFIG.reasoningTimeoutMs;
+const RIVER_EXPLOIT_STALE_REQUEST = FRONTEND_RIVER_EXPLOIT_CONFIG.staleRequestMarker;
+
+function createEmptyRiverExploitTrace(): RiverExploitTrace {
+  return { ...EMPTY_RIVER_EXPLOIT_TRACE };
+}
+
+async function readNdjsonStream(
+  response: Response,
+  onEvent: (event: RiverExploitEvent) => void,
+): Promise<void> {
+  if (!response.body) {
+    throw new Error('The backend did not return a readable streaming body.');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? '';
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      onEvent(JSON.parse(line) as RiverExploitEvent);
+    }
+
+    if (done) break;
+  }
+
+  if (buffer.trim()) {
+    onEvent(JSON.parse(buffer) as RiverExploitEvent);
+  }
+}
+
+function getHistoryActionActor(gameState: Pick<GameState, 'players'>, position: Action['position']): Action['actor'] {
+  const player = gameState.players.find(p => p.position === position);
+  if (!player) return 'other';
+  if (player.isHero) return 'hero';
+  return player.isActive ? 'ai' : 'other';
+}
+
+function createHistoryAction(
+  gameState: Pick<GameState, 'players'>,
+  action: Omit<Action, 'timestamp' | 'actor'>,
+): Action {
+  return {
+    ...action,
+    actor: getHistoryActionActor(gameState, action.position),
+    timestamp: new Date(),
+  };
+}
+
 export default function GameTable() {
   const { user, logout } = useAuth();
-  const [tableCount, setTableCount] = useState(1);
+  const isTestFeatureEnabled = import.meta.env.DEV || import.meta.env.VITE_ENABLE_TEST_FEATURES === 'true';
+  const [tableCount, setTableCount] = useState<number>(FRONTEND_TABLE_CONFIG.supportedTableCounts[0]);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [testConfig, setTestConfig] = useState<TestConfig>(() => {
-    const key = user ? testConfigKey(user.username) : 'poker_test_config';
+    const key = user ? testConfigKey(user.username) : FRONTEND_STORAGE_CONFIG.testConfigStorePrefix;
     const stored = localStorage.getItem(key);
-    return stored ? JSON.parse(stored) : DEFAULT_TEST_CONFIG;
+    if (!stored) {
+      return normalizeTestConfig(DEFAULT_TEST_CONFIG);
+    }
+
+    try {
+      return normalizeTestConfig({ ...DEFAULT_TEST_CONFIG, ...JSON.parse(stored) });
+    } catch {
+      return normalizeTestConfig(DEFAULT_TEST_CONFIG);
+    }
   });
   const [tables, setTables] = useState<GameState[]>(() => {
-    return [1, 2, 3, 4].map(i => createIdleTable(0, testConfig));
+    return FRONTEND_TABLE_CONFIG.supportedTableCounts.map(() => createIdleTable(0, testConfig));
   });
   const [activeTable, setActiveTable] = useState(0);
   const [quickBetSizes, setQuickBetSizes] = useState<number[]>(() => {
-    const key = user ? quickBetSizesKey(user.username) : 'poker_quick_bet_sizes';
+    const key = user ? quickBetSizesKey(user.username) : FRONTEND_STORAGE_CONFIG.quickBetSizesStorePrefix;
     const stored = localStorage.getItem(key);
-    return stored ? JSON.parse(stored) : [33, 50, 75, 100, 125, 150, 175, 200];
+    return stored ? JSON.parse(stored) : [...FRONTEND_TABLE_CONFIG.defaultQuickBetPercentages];
   });
   const [showHandHistory, setShowHandHistory] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showCustomHandDialog, setShowCustomHandDialog] = useState(false);
   const [customHandTableIndex, setCustomHandTableIndex] = useState<number | null>(null);
+  const showOpponentCards = testConfig.showOpponentCards ?? true;
+  const showFaceUpOpponentCards = isTestFeatureEnabled && (testConfig.showFaceUpOpponentCards ?? false);
+  const showAIDecisionNotes = isTestFeatureEnabled && (testConfig.showAIDecisionNotes ?? false);
+  const enableRiverLLMExploit = isTestFeatureEnabled && (testConfig.enableRiverLLMExploit ?? false);
+  const [riverExploitTraces, setRiverExploitTraces] = useState<RiverExploitTrace[]>(() =>
+    FRONTEND_TABLE_CONFIG.supportedTableCounts.map(() => createEmptyRiverExploitTrace())
+  );
 
   const latestTablesRef = useRef(tables);
   const prevStreetsRef = useRef<string[]>([]);
   /** 用于传给 processOpponentAction 的完整 table，避免 setState 异步导致 path 不完整 */
   const pendingOpponentTableRef = useRef<{ tableIndex: number; table: GameState } | null>(null);
+  const riverExploitRequestIdsRef = useRef<number[]>(
+    FRONTEND_TABLE_CONFIG.supportedTableCounts.map(() => 0),
+  );
+  const riverExploitAbortControllersRef = useRef<(AbortController | null)[]>(
+    FRONTEND_TABLE_CONFIG.supportedTableCounts.map(() => null),
+  );
+  const latestTestConfigRef = useRef(testConfig);
+  const enableRiverLLMExploitRef = useRef(enableRiverLLMExploit);
 
   useEffect(() => {
     latestTablesRef.current = tables;
@@ -751,7 +978,7 @@ export default function GameTable() {
     tables.forEach((table, i) => {
       const streetKey = `${table.id}_${table.currentStreet}_${table.communityCards.length}`;
       if (prevStreetsRef.current[i] !== streetKey && table.phase === 'playing') {
-        const villain = table.players.find(p => !p.isHero);
+        const villain = getActiveVillain(table);
         // If it's NOT the AI's turn, but a new card just dropped, notify backend to start solving
         if (villain && table.currentPosition !== villain.position) {
           triggerPreSolve(i);
@@ -764,10 +991,34 @@ export default function GameTable() {
           table.config.heroActsFirst === false
         ) {
           // Use a small delay so state is fully settled before AI acts
-          setTimeout(() => processOpponentAction(i), 800);
+          setTimeout(() => processOpponentAction(i), FRONTEND_TABLE_CONFIG.aiActsFirstAutoActionDelayMs);
         }
       }
       prevStreetsRef.current[i] = streetKey;
+    });
+  }, [tables]);
+
+  useEffect(() => {
+    latestTestConfigRef.current = testConfig;
+    enableRiverLLMExploitRef.current = enableRiverLLMExploit;
+  }, [enableRiverLLMExploit, testConfig]);
+
+  useEffect(() => {
+    setRiverExploitTraces(prev => {
+      let changed = false;
+      const next = prev.map((trace, index) => {
+        const table = tables[index];
+        if (!table) return trace;
+        if (trace.tableId && trace.tableId !== table.id) {
+          changed = true;
+          riverExploitRequestIdsRef.current[index] += 1;
+          riverExploitAbortControllersRef.current[index]?.abort('reset');
+          riverExploitAbortControllersRef.current[index] = null;
+          return createEmptyRiverExploitTrace();
+        }
+        return trace;
+      });
+      return changed ? next : prev;
     });
   }, [tables]);
 
@@ -823,12 +1074,301 @@ export default function GameTable() {
     return path;
   }, []);
 
+  const updateRiverExploitTrace = useCallback(
+    (tableIndex: number, updater: (trace: RiverExploitTrace) => RiverExploitTrace) => {
+      setRiverExploitTraces(prev =>
+        prev.map((trace, index) => (index === tableIndex ? updater(trace) : trace))
+      );
+    },
+    [],
+  );
+
+  const requestRiverLLMDecision = useCallback(async (
+    tableIndex: number,
+    tableToAct: GameState,
+    heroInfo: Player,
+    villainInfo: Player,
+    path: string[],
+    villainHole: string,
+  ): Promise<OpponentDecision | null> => {
+    const requestId = riverExploitRequestIdsRef.current[tableIndex] + 1;
+    riverExploitRequestIdsRef.current[tableIndex] = requestId;
+    riverExploitAbortControllersRef.current[tableIndex]?.abort('superseded');
+
+    const abortController = new AbortController();
+    riverExploitAbortControllersRef.current[tableIndex] = abortController;
+    const reasoningStartedAt = Date.now();
+    const reasoningLimitLabel = `${(RIVER_REASONING_TIMEOUT_MS / 1000).toFixed(0)}s`;
+    let reasoningTimeoutHandle: number | null = null;
+    let finalDecision: OpponentDecision | null = null;
+
+    const isCurrentRequest = () => riverExploitRequestIdsRef.current[tableIndex] === requestId;
+    const safeUpdate = (updater: (trace: RiverExploitTrace) => RiverExploitTrace) => {
+      if (!isCurrentRequest()) return;
+      updateRiverExploitTrace(tableIndex, updater);
+    };
+
+    const markReasoningComplete = (completedAt: number = Date.now()) => {
+      if (reasoningTimeoutHandle !== null) {
+        window.clearTimeout(reasoningTimeoutHandle);
+        reasoningTimeoutHandle = null;
+      }
+
+      safeUpdate(trace => (
+        trace.reasoningCompletedAt
+          ? trace
+          : {
+              ...trace,
+              reasoningCompletedAt: completedAt,
+            }
+      ));
+    };
+
+    safeUpdate(() => ({
+      tableId: tableToAct.id,
+      status: 'loading',
+      model: null,
+      reasoningSupported: null,
+      systemMarkdown: '',
+      userMarkdown: '',
+      reasoningMarkdown: '',
+      finalMarkdown: '',
+      reasoningStartedAt,
+      reasoningCompletedAt: null,
+      reasoningTimeoutMs: RIVER_REASONING_TIMEOUT_MS,
+      parsedStrategy: null,
+      action: null,
+      decisionSource: null,
+      decisionDetail: null,
+      warning: null,
+      error: null,
+    }));
+
+    reasoningTimeoutHandle = window.setTimeout(() => {
+      if (!isCurrentRequest()) return;
+
+      safeUpdate(trace => ({
+        ...trace,
+        status: 'error',
+        reasoningCompletedAt: trace.reasoningCompletedAt ?? (reasoningStartedAt + RIVER_REASONING_TIMEOUT_MS),
+        warning: trace.warning ?? `Reasoning exceeded the ${reasoningLimitLabel} limit. Falling back to the baseline strategy.`,
+        error: `The river exploit stream exceeded the ${reasoningLimitLabel} reasoning limit.`,
+      }));
+      abortController.abort('timeout');
+    }, RIVER_REASONING_TIMEOUT_MS);
+
+    try {
+      const response = await fetch('/api/river-exploit-stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: abortController.signal,
+        body: JSON.stringify({
+          board: tableToAct.communityCards.map(c => `${c.rank}${c.suit[0]}`).join(','),
+          path,
+          hand: villainHole,
+          effective_stack: Math.min(heroInfo.stack, villainInfo.stack),
+          use_mdf: tableToAct.config.enableMDF || false,
+          datasetSource: latestTestConfigRef.current.datasetSource,
+          heroPosition: heroInfo.position,
+          villainPosition: villainInfo.position,
+          actorPosition: villainInfo.position,
+          opponentPosition: heroInfo.position,
+        }),
+      });
+
+      if (!isCurrentRequest()) {
+        throw new Error(RIVER_EXPLOIT_STALE_REQUEST);
+      }
+
+      if (!response.ok) {
+        markReasoningComplete();
+
+        let message = `HTTP ${response.status}`;
+        try {
+          const payload = await response.json();
+          if (payload?.error) {
+            message = payload.error;
+          }
+        } catch {
+          // Ignore JSON parsing issues for error responses.
+        }
+
+        safeUpdate(trace => ({
+          ...trace,
+          status: 'error',
+          error: message,
+        }));
+        throw new Error(message);
+      }
+
+      await readNdjsonStream(response, event => {
+        if (!isCurrentRequest()) return;
+
+        if (event.type === 'status') {
+          safeUpdate(trace => ({
+            ...trace,
+            status: event.status === 'complete' ? 'complete' : 'loading',
+          }));
+          return;
+        }
+
+        if (event.type === 'system_markdown') {
+          safeUpdate(trace => ({
+            ...trace,
+            status: 'streaming',
+            systemMarkdown: event.content ?? '',
+          }));
+          return;
+        }
+
+        if (event.type === 'user_markdown') {
+          safeUpdate(trace => ({
+            ...trace,
+            status: 'streaming',
+            userMarkdown: event.content ?? '',
+          }));
+          return;
+        }
+
+        if (event.type === 'meta') {
+          if (event.reasoning_supported === false) {
+            markReasoningComplete(reasoningStartedAt);
+          }
+
+          safeUpdate(trace => ({
+            ...trace,
+            model: event.model ?? trace.model,
+            reasoningSupported:
+              typeof event.reasoning_supported === 'boolean'
+                ? event.reasoning_supported
+                : trace.reasoningSupported,
+            reasoningCompletedAt:
+              event.reasoning_supported === false
+                ? (trace.reasoningCompletedAt ?? reasoningStartedAt)
+                : trace.reasoningCompletedAt,
+          }));
+          return;
+        }
+
+        if (event.type === 'reasoning_delta') {
+          safeUpdate(trace => ({
+            ...trace,
+            status: 'streaming',
+            reasoningMarkdown: `${trace.reasoningMarkdown}${event.content ?? ''}`,
+          }));
+          return;
+        }
+
+        if (event.type === 'final_delta') {
+          markReasoningComplete();
+          safeUpdate(trace => ({
+            ...trace,
+            status: 'streaming',
+            finalMarkdown: `${trace.finalMarkdown}${event.content ?? ''}`,
+          }));
+          return;
+        }
+
+        if (event.type === 'parsed_output') {
+          safeUpdate(trace => ({
+            ...trace,
+            parsedStrategy: event.strategy ?? trace.parsedStrategy,
+          }));
+          return;
+        }
+
+        if (event.type === 'warning') {
+          safeUpdate(trace => ({
+            ...trace,
+            warning: event.message ?? trace.warning,
+          }));
+          return;
+        }
+
+        if (event.type === 'error') {
+          markReasoningComplete();
+          safeUpdate(trace => ({
+            ...trace,
+            status: 'error',
+            error: event.message ?? 'The backend reported a river exploit error.',
+          }));
+          return;
+        }
+
+        if (event.type === 'decision') {
+          markReasoningComplete();
+
+          if (event.action) {
+            const parts = event.action.split(' ');
+            const action = parts[0]?.toLowerCase();
+            if (['fold', 'check', 'call', 'bet', 'raise', 'allin'].includes(action)) {
+              finalDecision = {
+                action: action as Action['type'],
+                amount: parts.length > 1 ? parseFloat(parts[1]) : undefined,
+                decisionSource: typeof event.decision_source === 'string' ? event.decision_source : undefined,
+                decisionDetail: typeof event.decision_detail === 'string' ? event.decision_detail : undefined,
+              };
+            }
+          }
+
+          safeUpdate(trace => ({
+            ...trace,
+            status: 'complete',
+            parsedStrategy: event.strategy ?? trace.parsedStrategy,
+            action: event.action ?? trace.action,
+            decisionSource: event.decision_source ?? trace.decisionSource,
+            decisionDetail: event.decision_detail ?? trace.decisionDetail,
+          }));
+          return;
+        }
+
+        if (event.type === 'complete') {
+          markReasoningComplete();
+          safeUpdate(trace => ({
+            ...trace,
+            status: trace.status === 'error' ? 'error' : 'complete',
+          }));
+        }
+      });
+
+      if (!isCurrentRequest()) {
+        throw new Error(RIVER_EXPLOIT_STALE_REQUEST);
+      }
+
+      markReasoningComplete();
+      return finalDecision;
+    } catch (error) {
+      if (abortController.signal.aborted) {
+        const abortReason = abortController.signal.reason;
+        if (abortReason === 'superseded' || abortReason === 'reset') {
+          throw new Error(RIVER_EXPLOIT_STALE_REQUEST);
+        }
+        if (abortReason === 'timeout') {
+          throw new Error(`The river exploit stream exceeded the ${reasoningLimitLabel} reasoning limit.`);
+        }
+      }
+
+      if (!isCurrentRequest()) {
+        throw new Error(RIVER_EXPLOIT_STALE_REQUEST);
+      }
+
+      throw error instanceof Error ? error : new Error('The river exploit request failed.');
+    } finally {
+      if (reasoningTimeoutHandle !== null) {
+        window.clearTimeout(reasoningTimeoutHandle);
+      }
+      if (riverExploitAbortControllersRef.current[tableIndex] === abortController) {
+        riverExploitAbortControllersRef.current[tableIndex] = null;
+      }
+    }
+  }, [updateRiverExploitTrace]);
+
   const triggerPreSolve = useCallback(async (tableIndex: number, tableOverride?: GameState) => {
     const table = tableOverride ?? latestTablesRef.current[tableIndex];
     if (!table || table.phase !== 'playing') return;
 
     const boardCards = table.communityCards.map(c => `${c.rank}${c.suit[0]}`).join(',');
-    const villain = table.players.find(p => !p.isHero);
+    const villain = getActiveVillain(table);
     const hero = table.players.find(p => p.isHero);
     if (!villain || !hero) return;
 
@@ -846,7 +1386,7 @@ export default function GameTable() {
           hand: '', // Hand doesn't matter for pre-solving street transition
           effective_stack: Math.min(hero.stack, villain.stack),
           use_mdf: table.config.enableMDF || false,
-          datasetSource: testConfig.datasetSource
+          datasetSource: latestTestConfigRef.current.datasetSource
         })
       });
     } catch (e) {
@@ -956,12 +1496,11 @@ export default function GameTable() {
         newTable.currentPosition = null;
         newTable.phase = 'showdown';
 
-        currentHistory?.actions.push({
+        currentHistory?.actions.push(createHistoryAction(newTable, {
           position: hero.position,
           type: 'fold',
           potAfter: newTable.pot,
-          timestamp: new Date(),
-        });
+        }));
 
         // Villain wins — hero loses everything they put in
         const heroInvested = (newTable.config.stackDepthBB - 2.5) - hero.stack;
@@ -983,12 +1522,11 @@ export default function GameTable() {
         return newTable;
 
       } else if (action === 'check') {
-        currentHistory?.actions.push({
+        currentHistory?.actions.push(createHistoryAction(newTable, {
           position: hero.position,
           type: 'check',
           potAfter: newTable.pot,
-          timestamp: new Date(),
-        });
+        }));
 
         // Check if betting round should end (both players checked / bet matched)
         // If hero checks and villain hasn't acted yet this street, villain's turn
@@ -1011,20 +1549,22 @@ export default function GameTable() {
         hero.currentBet += callAmount;
         newTable.pot += callAmount;
 
-        currentHistory?.actions.push({
+        currentHistory?.actions.push(createHistoryAction(newTable, {
           position: hero.position,
           type: 'call',
           amount: callAmount,
           potAfter: newTable.pot,
-          timestamp: new Date(),
-        });
+        }));
 
         // Bets matched — advance to next street
         advanceToNextStreet(newTable, hero, villain, tableIndex);
         return newTable;
 
       } else if (action === 'bet') {
-        const totalBet = Math.max(1, amount || 1);
+        const totalBet = Math.max(
+          FRONTEND_TABLE_CONFIG.minimumBetSizeBb,
+          amount || FRONTEND_TABLE_CONFIG.minimumBetSizeBb,
+        );
         const increase = totalBet - hero.currentBet;
         hero.stack -= increase;
         hero.currentBet = totalBet;
@@ -1032,20 +1572,22 @@ export default function GameTable() {
         newTable.currentBet = totalBet;
         newTable.lastRaiseSize = totalBet;
 
-        currentHistory?.actions.push({
+        currentHistory?.actions.push(createHistoryAction(newTable, {
           position: hero.position,
           type: 'bet',
           amount: totalBet,
           potAfter: newTable.pot,
-          timestamp: new Date(),
-        });
+        }));
 
         newTable.currentPosition = villain.position;
         pendingOpponentTableRef.current = { tableIndex, table: structuredClone(newTable) };
         return newTable;
 
       } else if (action === 'raise') {
-        const totalRaise = Math.max(1, amount || 1);
+        const totalRaise = Math.max(
+          FRONTEND_TABLE_CONFIG.minimumBetSizeBb,
+          amount || FRONTEND_TABLE_CONFIG.minimumBetSizeBb,
+        );
         const increase = totalRaise - hero.currentBet;
         hero.stack -= increase;
         hero.currentBet = totalRaise;
@@ -1054,13 +1596,12 @@ export default function GameTable() {
         newTable.lastRaiseSize = Math.max(newTable.lastRaiseSize, raiseIncrease);
         newTable.currentBet = totalRaise;
 
-        currentHistory?.actions.push({
+        currentHistory?.actions.push(createHistoryAction(newTable, {
           position: hero.position,
           type: 'raise',
           amount: totalRaise,
           potAfter: newTable.pot,
-          timestamp: new Date(),
-        });
+        }));
 
         newTable.currentPosition = villain.position;
         pendingOpponentTableRef.current = { tableIndex, table: structuredClone(newTable) };
@@ -1079,25 +1620,23 @@ export default function GameTable() {
           newTable.lastRaiseSize = Math.max(newTable.lastRaiseSize, raiseIncrease);
           newTable.currentBet = hero.currentBet;
 
-          currentHistory?.actions.push({
+          currentHistory?.actions.push(createHistoryAction(newTable, {
             position: hero.position,
             type: 'allin',
             amount: hero.currentBet,
             potAfter: newTable.pot,
-            timestamp: new Date(),
-          });
+          }));
 
           newTable.currentPosition = villain.position;
           pendingOpponentTableRef.current = { tableIndex, table: structuredClone(newTable) };
         } else {
           // Hero is calling villain's all-in (bets are now matched) → advance to next street / showdown
-          currentHistory?.actions.push({
+          currentHistory?.actions.push(createHistoryAction(newTable, {
             position: hero.position,
             type: 'allin',
             amount: hero.currentBet,
             potAfter: newTable.pot,
-            timestamp: new Date(),
-          });
+          }));
 
           advanceToNextStreet(newTable, hero, villain, tableIndex);
         }
@@ -1117,7 +1656,7 @@ export default function GameTable() {
       } else {
         processOpponentAction(tableIndex);
       }
-    }, 5000);
+    }, FRONTEND_TABLE_CONFIG.delayedOpponentActionMs);
   }, []);
 
   // ─── Opponent Action ───────────────────────────────────────────────────
@@ -1143,52 +1682,117 @@ export default function GameTable() {
 
     const villainHole = villainInfo.cards ? `${villainInfo.cards[0].rank}${villainInfo.cards[0].suit[0]}${villainInfo.cards[1].rank}${villainInfo.cards[1].suit[0]}` : '';
 
-    let decision: { action: 'fold' | 'check' | 'call' | 'bet' | 'raise' | 'allin'; amount?: number } | null = null;
+    let decision: OpponentDecision | null = null;
+    let backendFallbackReason: string | null = null;
+    const shouldUseRiverLLMExploit =
+      enableRiverLLMExploitRef.current &&
+      tableToAct.currentStreet === 'river' &&
+      Boolean(villainHole);
 
     console.log(`[GTO] path: ${path.join(' -> ')}`);
-    try {
-      const res = await fetch('/api/action', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          board: boardCards,
+    if (shouldUseRiverLLMExploit) {
+      try {
+        decision = await requestRiverLLMDecision(
+          tableIndex,
+          tableToAct,
+          heroInfo,
+          villainInfo,
           path,
-          hand: villainHole,
-          effective_stack: Math.min(heroInfo.stack, villainInfo.stack),
-          use_mdf: tableToAct.config.enableMDF || false,
-          datasetSource: testConfig.datasetSource
-        })
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data?.strategy) {
-          console.log('[GTO] strategy:', data.strategy);
+          villainHole,
+        );
+      } catch (e) {
+        backendFallbackReason = e instanceof Error ? e.message : 'river exploit request failed';
+        if (backendFallbackReason === RIVER_EXPLOIT_STALE_REQUEST) {
+          return;
         }
-        if (data && data.action) {
-          // Parse action
-          const parts = data.action.split(' ');
-          const act = parts[0].toLowerCase();
-          if (['fold', 'check', 'call', 'bet', 'raise', 'allin'].includes(act)) {
-            decision = { action: act as any };
-            if (parts.length > 1) {
-              decision.amount = parseFloat(parts[1]);
+        console.warn('River LLM exploit failed, falling back to the baseline backend.');
+      }
+    }
+
+    if (!decision) {
+      try {
+        const res = await fetch('/api/action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            board: boardCards,
+            path,
+            hand: villainHole,
+            effective_stack: Math.min(heroInfo.stack, villainInfo.stack),
+            use_mdf: tableToAct.config.enableMDF || false,
+            datasetSource: latestTestConfigRef.current.datasetSource
+          })
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.strategy) {
+            console.log('[GTO] strategy:', data.strategy);
+          }
+          if (data && data.action) {
+            // Parse action
+            const parts = data.action.split(' ');
+            const act = parts[0].toLowerCase();
+            if (['fold', 'check', 'call', 'bet', 'raise', 'allin'].includes(act)) {
+              decision = {
+                action: act as Action['type'],
+                decisionSource: typeof data.decision_source === 'string' ? data.decision_source : undefined,
+                decisionDetail: typeof data.decision_detail === 'string' ? data.decision_detail : undefined,
+              };
+              if (parts.length > 1) {
+                decision.amount = parseFloat(parts[1]);
+              }
             }
           }
+
+          if (shouldUseRiverLLMExploit && decision) {
+            updateRiverExploitTrace(tableIndex, trace => ({
+              ...trace,
+              tableId: tableToAct.id,
+              status: 'complete',
+              action: data.action ?? trace.action,
+              decisionSource: typeof data.decision_source === 'string' ? data.decision_source : trace.decisionSource,
+              decisionDetail: typeof data.decision_detail === 'string' ? data.decision_detail : trace.decisionDetail,
+              warning: trace.warning ?? 'River exploit fell back to the baseline backend decision.',
+            }));
+          }
+        } else {
+          backendFallbackReason = `HTTP ${res.status}`;
         }
+      } catch (e) {
+        backendFallbackReason = e instanceof Error ? e.message : 'request failed';
+        console.warn('Backend AI failed or not reachable, falling back to random');
       }
-    } catch (e) {
-      console.warn('Backend AI failed or not reachable, falling back to random');
     }
 
     // Fallback exactly as it was
     if (!decision) {
-      decision = getOpponentAction(
+      const fallbackDecision = getOpponentAction(
         tableToAct.pot,
         tableToAct.currentBet,
         villainInfo.currentBet,
         villainInfo.stack
       );
+      decision = {
+        ...fallbackDecision,
+        decisionSource: 'client_fallback_random',
+        decisionDetail: backendFallbackReason
+          ? `Backend was unavailable (${backendFallbackReason}). Used the built-in client fallback.`
+          : 'Backend returned no action. Used the built-in client fallback.',
+      };
+
+      if (shouldUseRiverLLMExploit) {
+        updateRiverExploitTrace(tableIndex, trace => ({
+          ...trace,
+          tableId: tableToAct.id,
+          status: 'error',
+          action: `${fallbackDecision.action}${fallbackDecision.amount ? ` ${fallbackDecision.amount}` : ''}`,
+          decisionSource: 'client_fallback_random',
+          decisionDetail: decision?.decisionDetail ?? trace.decisionDetail,
+          warning: trace.warning ?? 'Both backend decision paths failed, so the client fallback was used.',
+          error: backendFallbackReason ?? trace.error,
+        }));
+      }
     }
 
     const finalDecision = decision;
@@ -1213,12 +1817,13 @@ export default function GameTable() {
         newTable.currentPosition = null;
         newTable.phase = 'showdown';
 
-        currentHistory?.actions.push({
+        currentHistory?.actions.push(createHistoryAction(newTable, {
           position: newVillain.position,
           type: 'fold',
           potAfter: newTable.pot,
-          timestamp: new Date(),
-        });
+          decisionSource: decisionApplied.decisionSource,
+          decisionDetail: decisionApplied.decisionDetail,
+        }));
 
         // Hero wins
         const heroInvested = (newTable.config.stackDepthBB - 2.5) - newHero.stack;
@@ -1240,12 +1845,13 @@ export default function GameTable() {
         }
 
       } else if (decisionApplied.action === 'check') {
-        currentHistory?.actions.push({
+        currentHistory?.actions.push(createHistoryAction(newTable, {
           position: newVillain.position,
           type: 'check',
           potAfter: newTable.pot,
-          timestamp: new Date(),
-        });
+          decisionSource: decisionApplied.decisionSource,
+          decisionDetail: decisionApplied.decisionDetail,
+        }));
 
         // Both checked — advance street
         const heroActedThisStreet = currentHistory?.actions.some(a => a.position === newHero.position) ?? false;
@@ -1261,13 +1867,14 @@ export default function GameTable() {
         newVillain.currentBet += callAmount;
         newTable.pot += callAmount;
 
-        currentHistory?.actions.push({
+        currentHistory?.actions.push(createHistoryAction(newTable, {
           position: newVillain.position,
           type: 'call',
           amount: callAmount,
           potAfter: newTable.pot,
-          timestamp: new Date(),
-        });
+          decisionSource: decisionApplied.decisionSource,
+          decisionDetail: decisionApplied.decisionDetail,
+        }));
 
         // Bets matched — advance street
         advanceToNextStreet(newTable, newHero, newVillain, tableIndex);
@@ -1281,13 +1888,14 @@ export default function GameTable() {
         newTable.currentBet = totalBet;
         newTable.lastRaiseSize = totalBet;
 
-        currentHistory?.actions.push({
+        currentHistory?.actions.push(createHistoryAction(newTable, {
           position: newVillain.position,
           type: 'bet',
           amount: totalBet,
           potAfter: newTable.pot,
-          timestamp: new Date(),
-        });
+          decisionSource: decisionApplied.decisionSource,
+          decisionDetail: decisionApplied.decisionDetail,
+        }));
 
         newTable.currentPosition = newHero.position;
 
@@ -1301,13 +1909,14 @@ export default function GameTable() {
         newTable.lastRaiseSize = Math.max(newTable.lastRaiseSize, raiseIncrease);
         newTable.currentBet = totalRaise;
 
-        currentHistory?.actions.push({
+        currentHistory?.actions.push(createHistoryAction(newTable, {
           position: newVillain.position,
           type: 'raise',
           amount: totalRaise,
           potAfter: newTable.pot,
-          timestamp: new Date(),
-        });
+          decisionSource: decisionApplied.decisionSource,
+          decisionDetail: decisionApplied.decisionDetail,
+        }));
 
         newTable.currentPosition = newHero.position;
 
@@ -1323,13 +1932,14 @@ export default function GameTable() {
           newTable.currentBet = newVillain.currentBet;
         }
 
-        currentHistory?.actions.push({
+        currentHistory?.actions.push(createHistoryAction(newTable, {
           position: newVillain.position,
           type: 'allin',
           amount: newVillain.currentBet,
           potAfter: newTable.pot,
-          timestamp: new Date(),
-        });
+          decisionSource: decisionApplied.decisionSource,
+          decisionDetail: decisionApplied.decisionDetail,
+        }));
 
         // If hero needs to act on the all-in
         const heroToCall = newVillain.currentBet - newHero.currentBet;
@@ -1407,7 +2017,7 @@ export default function GameTable() {
   // ─── Render ────────────────────────────────────────────────────────────
 
   const visibleTables = tables.slice(0, tableCount);
-  const isSingleView = tableCount === 1;
+  const isSingleView = tableCount === FRONTEND_TABLE_CONFIG.supportedTableCounts[0];
 
   return (
     <div className="min-h-screen bg-black text-white flex flex-col">
@@ -1424,7 +2034,7 @@ export default function GameTable() {
         <div className="flex items-center gap-3">
           {/* Table Count Selector */}
           <div className="flex items-center gap-1 bg-[#1a1a1a] rounded p-1">
-            {[1, 2, 3, 4].map((count) => (
+            {FRONTEND_TABLE_CONFIG.supportedTableCounts.map((count) => (
               <button
                 key={count}
                 onClick={() => setTableCount(count)}
@@ -1493,6 +2103,11 @@ export default function GameTable() {
             tableNumber={1}
             isSingleView={true}
             quickBetSizes={quickBetSizes}
+            showOpponentCards={showOpponentCards}
+            showFaceUpOpponentCards={showFaceUpOpponentCards}
+            showAIDecisionNotes={showAIDecisionNotes}
+            showRiverExploitSidebar={enableRiverLLMExploit || riverExploitTraces[0].status !== 'idle'}
+            riverExploitTrace={riverExploitTraces[0]}
             onAction={(action, amount) => handleAction(0, action, amount)}
             onStartNew={() => handleStartNew(0)}
             onRepeatHand={() => handleRepeatHand(0)}
@@ -1514,6 +2129,11 @@ export default function GameTable() {
                 tableNumber={index + 1}
                 isSingleView={false}
                 quickBetSizes={quickBetSizes}
+                showOpponentCards={showOpponentCards}
+                showFaceUpOpponentCards={showFaceUpOpponentCards}
+                showAIDecisionNotes={showAIDecisionNotes}
+                showRiverExploitSidebar={false}
+                riverExploitTrace={riverExploitTraces[index] ?? createEmptyRiverExploitTrace()}
                 onAction={(action, amount) => handleAction(index, action, amount)}
                 onStartNew={() => handleStartNew(index)}
                 onRepeatHand={() => handleRepeatHand(index)}
@@ -1535,12 +2155,17 @@ export default function GameTable() {
         isOpen={showSettings}
         onClose={() => setShowSettings(false)}
         quickBetSizes={quickBetSizes}
-        onQuickBetSizesChange={setQuickBetSizes}
+        onQuickBetSizesChange={(sizes) => {
+          setQuickBetSizes(sizes);
+          const key = user ? quickBetSizesKey(user.username) : FRONTEND_STORAGE_CONFIG.quickBetSizesStorePrefix;
+          localStorage.setItem(key, JSON.stringify(sizes));
+        }}
         testConfig={testConfig}
         onTestConfigChange={(config) => {
-          setTestConfig(config);
-          const key = user ? testConfigKey(user.username) : 'poker_test_config';
-          localStorage.setItem(key, JSON.stringify(config));
+          const normalizedConfig = normalizeTestConfig(config);
+          setTestConfig(normalizedConfig);
+          const key = user ? testConfigKey(user.username) : FRONTEND_STORAGE_CONFIG.testConfigStorePrefix;
+          localStorage.setItem(key, JSON.stringify(normalizedConfig));
         }}
       />
 

@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """
-从 HuggingFace Dataset 下载指定牌面的 Parquet 文件到 cache 目录。
-
-用法:
-  python download_from_hf.py AcAdAh AcAdKc
-  python download_from_hf.py AcAdAh --repo Tsumugii/gto-srp-100bb-v1
-  python download_from_hf.py 1 2 3 --cards configs/cards.txt   # 按序号
+Download solver cache parquet files from the configured dataset sources.
 """
+
+from __future__ import annotations
 
 import argparse
 import re
@@ -17,66 +14,95 @@ from typing import Optional
 try:
     from huggingface_hub import HfApi, hf_hub_download
 except ImportError:
-    print("pip install -U huggingface_hub")
+    print("Please install huggingface_hub: pip install -U huggingface_hub")
     sys.exit(1)
 
+
 SCRIPT_DIR = Path(__file__).parent.resolve()
-DEFAULT_REPO = "Tsumugii/gto-srp-100bb-v1"
-DEFAULT_CACHE = "cache"
+AI_DIR = SCRIPT_DIR.parent
+if str(AI_DIR) not in sys.path:
+    sys.path.insert(0, str(AI_DIR))
+
+from runtime_config import (
+    get_dataset_repo_id,
+    get_download_source_config,
+    list_download_source_names,
+)
+
+
+DEFAULT_REPO = get_dataset_repo_id()
+DEFAULT_CACHE = str((SCRIPT_DIR / "cache" / "dataset").resolve())
 
 
 def parse_repo_id(repo_arg: str) -> str:
-    """从 URL 或 repo_id 解析出标准 repo_id"""
+    """Normalize a dataset repo URL or repo id into a canonical repo id."""
     repo_arg = repo_arg.strip()
-    m = re.search(
+    match = re.search(
         r"huggingface\.co/datasets/([a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+)",
         repo_arg,
         re.IGNORECASE,
     )
-    if m:
-        return m.group(1)
+    if match:
+        return match.group(1)
     if "/" in repo_arg and " " not in repo_arg:
         return repo_arg
-    raise ValueError(f"无法解析 repo: {repo_arg}")
+    raise ValueError(f"Could not parse dataset repo id from: {repo_arg}")
 
 
 def board_to_filename(board: str) -> str:
-    """牌面转文件名（去逗号）"""
     return board.replace(",", "")
 
 
-def find_file_in_repo(repo_id: str, board: str) -> Optional[str]:
-    """在 repo 中查找牌面对应的 parquet 文件路径（大小写不敏感），包含镜像站降级支持"""
-    import os
-    try:
-        api = HfApi()
-        files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
-    except Exception as e:
-        print(f"HuggingFace query failed: {e}. Trying HF-Mirror...")
-        os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
-        api = HfApi(endpoint="https://hf-mirror.com")
-        files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
+def _get_endpoint_for_source(source_name: str) -> Optional[str]:
+    source_config = get_download_source_config(source_name)
+    endpoint = source_config.get("endpoint")
+    return str(endpoint) if endpoint else None
 
-    fname = board_to_filename(board)
-    fname_lower = fname.lower()
-    for f in files:
-        if f.lower().endswith(".parquet"):
-            stem = Path(f).stem
-            if stem.lower() == fname_lower:
-                return f
+
+def _get_source_label(source_name: str) -> str:
+    source_config = get_download_source_config(source_name)
+    return str(source_config.get("label") or source_name)
+
+
+def list_repo_files_with_fallback(repo_id: str, preferred_source: str = None) -> tuple[list[str] | None, str | None, Exception | None]:
+    last_error: Exception | None = None
+    for source_name in list_download_source_names(preferred_source):
+        endpoint = _get_endpoint_for_source(source_name)
+        try:
+            api = HfApi(endpoint=endpoint) if endpoint else HfApi()
+            files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
+            return files, source_name, None
+        except Exception as exc:
+            last_error = exc
+            print(f"[Download] Repo listing failed via {_get_source_label(source_name)}: {exc}")
+    return None, None, last_error
+
+
+def find_file_in_repo(repo_id: str, board: str, preferred_source: str = None) -> Optional[str]:
+    files, _, last_error = list_repo_files_with_fallback(repo_id, preferred_source)
+    if files is None:
+        print(f"[Download] Repo listing failed for all configured sources: {last_error}")
+        return None
+
+    filename = board_to_filename(board).lower()
+    for file_path in files:
+        if not file_path.lower().endswith(".parquet"):
+            continue
+        if Path(file_path).stem.lower() == filename:
+            return file_path
     return None
 
 
 def read_boards_from_cards(cards_path: Path) -> list[str]:
-    """从 cards.txt 读取牌面列表"""
     if not cards_path.exists():
-        raise FileNotFoundError(f"文件不存在: {cards_path}")
-    boards = []
-    with open(cards_path, "r", encoding="utf-8") as f:
-        for line in f:
-            b = line.strip()
-            if b:
-                boards.append(b)
+        raise FileNotFoundError(f"Cards file does not exist: {cards_path}")
+
+    boards: list[str] = []
+    with open(cards_path, "r", encoding="utf-8") as handle:
+        for line in handle:
+            board = line.strip()
+            if board:
+                boards.append(board)
     return boards
 
 
@@ -87,81 +113,46 @@ def download_board_from_hf(
     preferred_source: str = None,
 ) -> Optional[Path]:
     """
-    从 HuggingFace 下载单个牌面的 Parquet 到指定目录。
-
-    Args:
-        board: 牌面名称，如 Ac2c2d 或 Ac,Ad,Ah
-        cache_dir: 下载目录
-        repo_id: HuggingFace dataset repo
-        preferred_source: 优先下载源 ('huggingface' 或 'hf-mirror')
-
-    Returns:
-        下载后的本地路径，失败返回 None
+    Download a single board parquet into the target cache directory.
     """
-    try:
-        from huggingface_hub import HfApi, hf_hub_download
-    except ImportError:
-        return None
-
     board = board.strip()
-    fname = board_to_filename(board)
     cache_path = Path(cache_dir).resolve()
     cache_path.mkdir(parents=True, exist_ok=True)
 
-    try:
-        import os
-        
-        # 如果指定了镜像站，提前设置环境变量
-        if preferred_source == 'hf-mirror':
-            os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
-            print(f"Using preferred source: HF-Mirror")
-
-        remote_path = find_file_in_repo(repo_id, board)
-        if not remote_path:
-            return None
-        
-        try:
-            # 尝试主要下载
-            endpoint = "https://hf-mirror.com" if preferred_source == 'hf-mirror' else None
-            local_path = hf_hub_download(
-                repo_id=repo_id,
-                filename=remote_path,
-                repo_type="dataset",
-                local_dir=str(cache_path),
-                local_dir_use_symlinks=False,
-                force_download=False,
-                endpoint=endpoint
-            )
-        except Exception as e:
-            if preferred_source == 'hf-mirror':
-                # 如果镜像站都挂了，那彻底没办法了
-                print(f"Preferred HF-Mirror failed: {e}")
-                return None
-            
-            print(f"HuggingFace official failed: {e}. Trying HF-Mirror fallback...")
-            os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
-            local_path = hf_hub_download(
-                repo_id=repo_id,
-                filename=remote_path,
-                repo_type="dataset",
-                local_dir=str(cache_path),
-                local_dir_use_symlinks=False,
-                force_download=False,
-                endpoint="https://hf-mirror.com"
-            )
-            
-        return Path(local_path)
-    except Exception as e:
-        print(f"Fetch failed completely: {e}")
+    remote_path = find_file_in_repo(repo_id, board, preferred_source)
+    if not remote_path:
+        print(f"[Download] No parquet file was found for board: {board}")
         return None
+
+    last_error: Exception | None = None
+    for source_name in list_download_source_names(preferred_source):
+        endpoint = _get_endpoint_for_source(source_name)
+        try:
+            local_path = hf_hub_download(
+                repo_id=repo_id,
+                filename=remote_path,
+                repo_type="dataset",
+                local_dir=str(cache_path),
+                local_dir_use_symlinks=False,
+                force_download=False,
+                endpoint=endpoint,
+            )
+            print(f"[Download] {board} fetched via {_get_source_label(source_name)}")
+            return Path(local_path)
+        except Exception as exc:
+            last_error = exc
+            print(f"[Download] Fetch failed via {_get_source_label(source_name)}: {exc}")
+
+    print(f"[Download] Fetch failed for all configured sources: {last_error}")
+    return None
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="从 HuggingFace Dataset 下载指定牌面的 Parquet 到 cache",
+        description="Download board parquet files into the local cache.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-示例:
+Examples:
   python download_from_hf.py AcAdAh AcAdKc
   python download_from_hf.py 1 2 3 --cards configs/cards.txt
   python download_from_hf.py AcAdAh --cache-dir ./my_cache
@@ -170,94 +161,92 @@ def main() -> None:
     parser.add_argument(
         "boards",
         nargs="+",
-        help="牌面名称（如 AcAdAh）或序号（需配合 --cards）",
+        help="Board names such as AcAdAh, or numeric indexes when --cards is used.",
     )
     parser.add_argument(
         "--repo",
         type=str,
         default=DEFAULT_REPO,
-        help=f"Dataset repo（默认: {DEFAULT_REPO}）",
+        help=f"Dataset repo id or dataset URL. Default: {DEFAULT_REPO}",
     )
     parser.add_argument(
         "--cache-dir",
         type=str,
         default=DEFAULT_CACHE,
-        help=f"下载目录（默认: {DEFAULT_CACHE}）",
+        help=f"Local cache directory. Default: {DEFAULT_CACHE}",
     )
     parser.add_argument(
         "--cards",
         type=str,
         default=None,
-        help="cards.txt 路径，指定后 boards 可填序号",
+        help="Path to cards.txt. When provided, positional board values may be indexes.",
+    )
+    parser.add_argument(
+        "--source",
+        type=str,
+        default=None,
+        help="Optional preferred source name from ai/runtime_config.json.",
     )
     args = parser.parse_args()
 
     try:
         repo_id = parse_repo_id(args.repo)
-    except ValueError as e:
-        print(f"[错误] {e}")
+    except ValueError as exc:
+        print(f"[Error] {exc}")
         sys.exit(1)
 
     cache_dir = Path(args.cache_dir).resolve()
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # 解析牌面列表
     if args.cards:
         cards_path = Path(args.cards)
         if not cards_path.is_absolute():
             cards_path = SCRIPT_DIR.parent / args.cards
         all_boards = read_boards_from_cards(cards_path)
-        boards = []
-        for b in args.boards:
+        boards: list[str] = []
+        for raw in args.boards:
             try:
-                idx = int(b)
-                if 1 <= idx <= len(all_boards):
-                    boards.append(all_boards[idx - 1])
-                else:
-                    print(f"[警告] 序号 {idx} 超出范围 1-{len(all_boards)}，已忽略")
+                index = int(raw)
             except ValueError:
-                boards.append(b)
+                boards.append(raw)
+                continue
+
+            if 1 <= index <= len(all_boards):
+                boards.append(all_boards[index - 1])
+            else:
+                print(f"[Warning] Skipping out-of-range board index: {index}")
     else:
-        boards = [b.strip() for b in args.boards if b.strip()]
+        boards = [board.strip() for board in args.boards if board.strip()]
 
     if not boards:
-        print("[错误] 没有有效的牌面")
+        print("[Error] No valid boards were provided.")
         sys.exit(1)
 
-    api = HfApi()
-    print(f"Repo: https://huggingface.co/datasets/{repo_id}")
+    print(f"Repo:  https://huggingface.co/datasets/{repo_id}")
     print(f"Cache: {cache_dir}")
-    print(f"牌面: {len(boards)} 个")
+    print(f"Boards: {len(boards)}")
     print("-" * 50)
 
-    ok = 0
-    fail = 0
+    success_count = 0
+    failure_count = 0
+
     for board in boards:
-        fname = board_to_filename(board)
-        remote_path = find_file_in_repo(repo_id, board)
-        if not remote_path:
-            print(f"  [跳过] {board} - 未在 repo 中找到")
-            fail += 1
-            continue
-
-        try:
-            local_path = hf_hub_download(
-                repo_id=repo_id,
-                filename=remote_path,
-                repo_type="dataset",
-                local_dir=str(cache_dir),
-                local_dir_use_symlinks=False,
-                force_download=False,
-            )
-            print(f"  [OK] {board} -> {Path(local_path).name}")
-            ok += 1
-        except Exception as e:
-            print(f"  [失败] {board}: {e}")
-            fail += 1
+        local_path = download_board_from_hf(
+            board=board,
+            cache_dir=str(cache_dir),
+            repo_id=repo_id,
+            preferred_source=args.source,
+        )
+        if local_path:
+            print(f"[OK] {board} -> {local_path.name}")
+            success_count += 1
+        else:
+            print(f"[FAILED] {board}")
+            failure_count += 1
 
     print("-" * 50)
-    print(f"完成: {ok} 成功, {fail} 失败")
-    sys.exit(1 if fail else 0)
+    print(f"Completed: {success_count} succeeded, {failure_count} failed")
+    sys.exit(1 if failure_count else 0)
 
 
 if __name__ == "__main__":

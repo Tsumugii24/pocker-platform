@@ -5,6 +5,7 @@ import { Download, TrendingUp, TrendingDown } from 'lucide-react';
 import type { HandRecord } from '@/types/poker';
 import { useAuth } from '@/contexts/AuthContext';
 import { handHistoryKey } from '@/lib/auth';
+import { FRONTEND_STORAGE_CONFIG } from '@/config/frontend-config';
 
 interface HandHistoryDrawerProps {
   isOpen: boolean;
@@ -34,7 +35,7 @@ export function HandHistoryDrawer({ isOpen, onClose }: HandHistoryDrawerProps) {
   useEffect(() => {
     if (isOpen) {
       // Load hand history from localStorage scoped to user
-      const key = user ? handHistoryKey(user.username) : 'poker_hand_history';
+      const key = user ? handHistoryKey(user.username) : FRONTEND_STORAGE_CONFIG.handHistoryStorePrefix;
       const stored = localStorage.getItem(key);
       if (stored) {
         const hands: HandRecord[] = JSON.parse(stored);
@@ -58,7 +59,7 @@ export function HandHistoryDrawer({ isOpen, onClose }: HandHistoryDrawerProps) {
   }, [isOpen]);
 
   const handleExport = () => {
-    const key = user ? handHistoryKey(user.username) : 'poker_hand_history';
+    const key = user ? handHistoryKey(user.username) : FRONTEND_STORAGE_CONFIG.handHistoryStorePrefix;
     const stored = localStorage.getItem(key);
     if (!stored) {
       alert('没有手牌历史数据');

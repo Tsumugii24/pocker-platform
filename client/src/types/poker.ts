@@ -9,6 +9,7 @@ export interface Card {
 export type Position = 'UTG' | 'HJ' | 'CO' | 'BTN' | 'SB' | 'BB';
 
 export type ActionType = 'fold' | 'check' | 'call' | 'bet' | 'raise' | 'allin';
+export type ActionActor = 'hero' | 'ai' | 'other';
 
 export interface Action {
   position: Position;
@@ -16,6 +17,9 @@ export interface Action {
   amount?: number;
   potAfter: number;
   timestamp: Date;
+  actor?: ActionActor;
+  decisionSource?: string;
+  decisionDetail?: string;
 }
 
 export type Street = 'preflop' | 'flop' | 'turn' | 'river';
@@ -40,9 +44,13 @@ export interface TestConfig {
   customHoleCards?: boolean; // whether to also pick hole cards in custom deal mode
   allowPlayerBluff?: boolean;
   allowAIBluff?: boolean;
-  enableMDF?: boolean; // MDF 防守机制功能开关
-  datasetSource?: 'huggingface' | 'hf-mirror'; // 数据集下载源
-  heroActsFirst?: boolean; // true(默认) = Hero是OOP先行动; false = AI是OOP先行动
+  enableMDF?: boolean;
+  datasetSource?: 'huggingface' | 'hf-mirror';
+  heroActsFirst?: boolean; // true = Hero acts first (OOP), false = AI acts first (OOP)
+  showOpponentCards?: boolean;
+  showFaceUpOpponentCards?: boolean;
+  showAIDecisionNotes?: boolean;
+  enableRiverLLMExploit?: boolean;
 }
 
 export const DEFAULT_TEST_CONFIG: TestConfig = {
@@ -56,14 +64,18 @@ export const DEFAULT_TEST_CONFIG: TestConfig = {
   allowAIBluff: true,
   enableMDF: false,
   heroActsFirst: true,
+  showOpponentCards: true,
+  showFaceUpOpponentCards: false,
+  showAIDecisionNotes: false,
+  enableRiverLLMExploit: false,
 };
 
 export interface Player {
   position: Position;
-  stack: number;      // remaining stack in BB
+  stack: number; // remaining stack in BB
   cards?: [Card, Card];
   isHero: boolean;
-  isActive: boolean;  // still in the hand (not folded, seated at table)
+  isActive: boolean; // still in the hand (not folded, seated at table)
   hasFolded: boolean;
   currentBet: number; // amount bet on current street
 }
@@ -82,16 +94,16 @@ export interface GameState {
   config: TestConfig;
   players: Player[];
   communityCards: Card[];
-  deck: Card[];       // remaining deck
+  deck: Card[]; // remaining deck
   pot: number;
   currentStreet: Street;
   currentPosition: Position | null;
   effectiveStack: number;
   history: StreetHistory[];
   handNumber: number;
-  currentBet: number;        // highest bet on current street that must be matched
-  lastRaiseSize: number;     // size of the last raise (for min-raise calc)
-  initialDeck?: Card[];      // the shuffled deck at the start of the hand
+  currentBet: number; // highest bet on current street that must be matched
+  lastRaiseSize: number; // size of the last raise (for min-raise calc)
+  initialDeck?: Card[]; // the shuffled deck at the start of the hand
   showdownResult?: ShowdownResult;
 }
 

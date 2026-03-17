@@ -1,4 +1,5 @@
 import { Card, Suit, Rank, TestConfig } from '@/types/poker';
+import { normalizeTestConfig } from './test-config';
 
 export const DEFAULT_RANGE_OOP = "AQs:0.250,AJs:0.250,ATs:0.250,A9s,A8s,A7s,A6s,A5s,A4s:0.750,A3s:0.750,A2s:0.750,KQs:0.250,KJs:0.250,KTs:0.750,K9s:0.750,K8s,K7s,K6s,K5s,K4s,K3s,K2s,AQo:0.250,KQo:0.500,QJs:0.500,QTs:0.750,Q9s:0.750,Q8s,Q7s,Q6s,Q5s,Q4s,Q3s,Q2s,AJo:0.750,KJo,QJo,JTs:0.250,J9s:0.500,J8s,J7s,J6s,J5s,J4s,J3s,J2s,ATo:0.750,KTo,QTo,JTo,TT:0.250,T9s:0.750,T8s,T7s:0.984,T6s,T5s:0.250,T4s:0.250,T3s:0.250,T2s:0.250,A9o,K9o,Q9o,J9o,T9o,99:0.250,98s:0.750,97s,96s,95s:0.250,94s:0.250,93s:0.250,92s:0.250,A8o,98o:0.250,88,87s:0.750,86s,85s,84s:0.250,83s:0.250,82s:0.250,A7o,87o:0.250,77,76s:0.750,75s,74s:0.596,73s:0.250,72s:0.250,A6o,76o:0.250,66,65s:0.750,64s,63s:0.564,62s:0.250,A5o:0.750,65o:0.250,55,54s:0.750,53s,52s:0.552,A4o,54o:0.250,44:0.996,43s,42s:0.524,A3o,33,32s:0.250,A2o,22";
 
@@ -62,9 +63,10 @@ export function pickRandomHandFromCombos(combos: [Card, Card][], excludeCards: C
 }
 
 export function generateHoleCards(cfg: TestConfig, excludedCards: Card[], deckToDrawFrom: Card[]): { heroHole: [Card, Card], villainHole: [Card, Card], remainingDeck: Card[] } {
-    const isHeroOOP = cfg.heroPosition === 'BB'; // Very simplified, BB is OOP against UTG.
-    const allowHeroBluff = cfg.allowPlayerBluff ?? true;
-    const allowVillainBluff = cfg.allowAIBluff ?? true;
+    const normalizedCfg = normalizeTestConfig(cfg);
+    const isHeroOOP = normalizedCfg.heroPosition === 'BB'; // Very simplified, BB is OOP against UTG.
+    const allowHeroBluff = normalizedCfg.allowPlayerBluff ?? true;
+    const allowVillainBluff = normalizedCfg.allowAIBluff ?? true;
 
     let heroHole: [Card, Card] | null = null;
     let villainHole: [Card, Card] | null = null;

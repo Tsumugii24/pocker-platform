@@ -5,6 +5,7 @@ import { Card, Suit, Rank, Position } from '@/types/poker';
 import { PokerCard } from './PokerCard';
 import { cn } from '@/lib/utils';
 import { createDeck } from '@/lib/game-engine';
+import { FRONTEND_CUSTOM_HAND_CONFIG } from '@/config/frontend-config';
 
 interface CustomHandDialogProps {
     isOpen: boolean;
@@ -28,7 +29,9 @@ export function CustomHandDialog({
     customHoleCards = false,
     datasetSource,
 }: CustomHandDialogProps) {
-    const slotCount = customHoleCards ? 7 : 3;
+    const slotCount = customHoleCards
+        ? FRONTEND_CUSTOM_HAND_CONFIG.boardAndHoleCardSlotCount
+        : FRONTEND_CUSTOM_HAND_CONFIG.boardOnlySlotCount;
     // If customHoleCards: 7 slots [Hero1, Hero2, Villain1, Villain2, Flop1, Flop2, Flop3]
     // If not customHoleCards: 3 slots [Flop1, Flop2, Flop3]
     const [slots, setSlots] = useState<(Card | null)[]>(Array(slotCount).fill(null));

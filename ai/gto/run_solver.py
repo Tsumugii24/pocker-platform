@@ -1,440 +1,349 @@
 """
-TexasSolver Console 求解脚本
-直接读取 configs 目录下的配置文件进行求解
+TexasSolver console runner utilities.
+
+This module supports:
+- auto-compiling the solver if the executable is missing
+- running a single solver config
+- batch-running configs under the local configs directory
+- optional JSON float post-processing
 """
 
-import subprocess
 import os
+import re
+import subprocess
 import sys
 import time
-import re
 from pathlib import Path
 
 
-# ==================== 配置 ====================
-# 脚本所在目录
 SCRIPT_DIR = Path(__file__).parent.resolve()
-# 求解器路径（根据操作系统选择）
 IS_WINDOWS = sys.platform == "win32"
 IS_DARWIN = sys.platform == "darwin"
-if IS_WINDOWS:
-    SOLVER_EXE = str(SCRIPT_DIR / "solver" / "console_solver.exe")
-else:
-    SOLVER_EXE = str(SCRIPT_DIR / "solver" / "console_solver")
-# Resources 目录
+SOLVER_EXE = str(SCRIPT_DIR / "solver" / ("console_solver.exe" if IS_WINDOWS else "console_solver"))
 RESOURCE_DIR = str(SCRIPT_DIR / "solver")
-# 配置文件目录
 CONFIG_DIR = "configs"
-# 结果输出目录
 RESULTS_DIR = "cache/results"
-# 超时时间（秒）
-TIMEOUT = 7200  # 2小时
-# 浮点数保留小数位数
+TIMEOUT = 7200
 FLOAT_PRECISION = 3
-# 是否启用后处理（格式化JSON中的浮点数）
-# 注：C++ 端已内置精度控制，通常不需要后处理
 POST_PROCESS = False
-# =============================================
 
 
 def auto_compile_solver() -> bool:
-    """
-    自动编译 solver
-    根据操作系统自动选择编译脚本
-    
-    Returns:
-        编译是否成功
-    """
+    """Compile the solver executable for the current platform."""
     print("\n" + "=" * 60)
-    print("检测到 console_solver 不存在，开始自动编译...")
+    print("Solver executable was not found. Starting automatic build...")
     print("=" * 60)
-    
+
     try:
         if IS_WINDOWS:
-            # Windows: 使用 PowerShell 执行 compile.ps1
             compile_script = SCRIPT_DIR / "compile.ps1"
             if not compile_script.exists():
-                print(f"[错误] 编译脚本不存在: {compile_script}")
+                print(f"[Error] Compile script was not found: {compile_script}")
                 return False
-            
-            print(f"[编译] 执行: powershell -ExecutionPolicy Bypass -File {compile_script}")
+
+            print(f"[Build] Running: powershell -ExecutionPolicy Bypass -File {compile_script}")
             result = subprocess.run(
                 ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(compile_script)],
                 cwd=str(SCRIPT_DIR),
-                capture_output=False
+                capture_output=False,
             )
         else:
-            # Linux: compile.sh, macOS: compile_macos.sh
             compile_script = SCRIPT_DIR / ("compile_macos.sh" if IS_DARWIN else "compile.sh")
             if not compile_script.exists():
-                print(f"[错误] 编译脚本不存在: {compile_script}")
+                print(f"[Error] Compile script was not found: {compile_script}")
                 return False
-            
-            # 确保脚本有执行权限
+
             os.chmod(str(compile_script), 0o755)
-            
-            print(f"[编译] 执行: bash {compile_script}")
+            print(f"[Build] Running: bash {compile_script}")
             result = subprocess.run(
                 ["bash", str(compile_script)],
                 cwd=str(SCRIPT_DIR),
-                capture_output=False
+                capture_output=False,
             )
-        
+
         if result.returncode == 0:
             print("\n" + "=" * 60)
-            print("[成功] 编译完成!")
+            print("[Done] Solver build completed successfully.")
             print("=" * 60 + "\n")
             return True
-        else:
-            print(f"\n[错误] 编译失败，返回码: {result.returncode}")
-            return False
-            
-    except FileNotFoundError as e:
-        print(f"[错误] 找不到编译工具: {e}")
-        print("请确保已安装以下依赖:")
+
+        print(f"\n[Error] Solver build failed with exit code: {result.returncode}")
+        return False
+
+    except FileNotFoundError as exc:
+        print(f"[Error] A required build tool was not found: {exc}")
+        print("Please make sure the following tools are installed:")
         if IS_WINDOWS:
             print("  - CMake")
             print("  - Ninja")
-            print("  - MinGW-w64 或 MSVC")
+            print("  - MinGW-w64 or MSVC")
         else:
             print("  - CMake")
             print("  - make")
             print("  - g++")
         return False
-    except Exception as e:
-        print(f"[错误] 编译过程出错: {e}")
+    except Exception as exc:
+        print(f"[Error] Unexpected build failure: {exc}")
         return False
 
 
 def ensure_solver_exists() -> bool:
-    """
-    确保 solver 可执行文件存在
-    如果不存在则自动编译
-    
-    Returns:
-        solver 是否可用
-    """
+    """Ensure the solver executable exists, compiling it if necessary."""
     if os.path.exists(SOLVER_EXE):
         return True
-    
-    print(f"[警告] Solver 不存在: {SOLVER_EXE}")
-    
-    # 尝试自动编译
-    if auto_compile_solver():
-        # 再次检查
-        if os.path.exists(SOLVER_EXE):
-            return True
-        else:
-            print(f"[错误] 编译后仍找不到 solver: {SOLVER_EXE}")
-            return False
-    
+
+    print(f"[Warning] Solver executable was not found: {SOLVER_EXE}")
+    if auto_compile_solver() and os.path.exists(SOLVER_EXE):
+        return True
+
+    print(f"[Error] Solver is still unavailable after the build attempt: {SOLVER_EXE}")
     return False
 
 
-def format_json_floats(input_file: str, output_file: str = None, precision: int = 3):
-    """
-    使用正则表达式流式处理 JSON 文件，将浮点数格式化为指定小数位数。
-    避免将整个文件加载到内存中。
-    
-    Args:
-        input_file: 输入 JSON 文件路径
-        output_file: 输出文件路径，默认覆盖原文件
-        precision: 保留小数位数
-    """
+def format_json_floats(input_file: str, output_file: str = None, precision: int = 3) -> None:
+    """Stream-process a JSON file and round float values to a fixed precision."""
     if output_file is None:
         output_file = input_file
-    
-    # 匹配纯浮点数的正则表达式（不在引号内）
+
     float_pattern = re.compile(r'(?<!["\w])(-?\d+\.\d{4,})(?!["\w])')
-    
-    # 匹配 action 字符串中的数值，如 "BET 2.000000" -> "BET 2.00"
     action_pattern = re.compile(r'"(BET|RAISE|CALL|CHECK|FOLD|ALLIN)(\s+)(\d+\.\d+)"')
-    
     temp_file = input_file + ".tmp"
-    
+
     try:
-        with open(input_file, 'r', encoding='utf-8') as fin, \
-             open(temp_file, 'w', encoding='utf-8') as fout:
-            
-            # 逐块读取处理，每次读取 1MB
+        with open(input_file, "r", encoding="utf-8") as fin, open(temp_file, "w", encoding="utf-8") as fout:
             chunk_size = 1024 * 1024
             buffer = ""
-            
+
             while True:
                 chunk = fin.read(chunk_size)
                 if not chunk:
-                    # 处理剩余 buffer
                     if buffer:
-                        # 1. 处理 action 字符串中的数值
                         result = action_pattern.sub(
-                            lambda m: f'"{m.group(1)}{m.group(2)}{float(m.group(3)):.2f}"',
-                            buffer
+                            lambda match: f'"{match.group(1)}{match.group(2)}{float(match.group(3)):.2f}"',
+                            buffer,
                         )
-                        # 2. 处理纯浮点数
                         result = float_pattern.sub(
-                            lambda m: f"{float(m.group(1)):.{precision}f}", 
-                            result
+                            lambda match: f"{float(match.group(1)):.{precision}f}",
+                            result,
                         )
                         fout.write(result)
                     break
-                
+
                 buffer += chunk
-                
-                # 找到最后一个完整的数字边界（逗号、括号等）
                 last_safe = max(
-                    buffer.rfind(','),
-                    buffer.rfind(']'),
-                    buffer.rfind('}'),
-                    buffer.rfind(':')
+                    buffer.rfind(","),
+                    buffer.rfind("]"),
+                    buffer.rfind("}"),
+                    buffer.rfind(":"),
                 )
-                
+
                 if last_safe > 0:
-                    # 处理到安全位置
-                    to_process = buffer[:last_safe + 1]
-                    buffer = buffer[last_safe + 1:]
-                    
-                    # 1. 处理 action 字符串中的数值（保留2位小数）
+                    to_process = buffer[: last_safe + 1]
+                    buffer = buffer[last_safe + 1 :]
                     result = action_pattern.sub(
-                        lambda m: f'"{m.group(1)}{m.group(2)}{float(m.group(3)):.2f}"',
-                        to_process
+                        lambda match: f'"{match.group(1)}{match.group(2)}{float(match.group(3)):.2f}"',
+                        to_process,
                     )
-                    
-                    # 2. 处理纯浮点数（保留指定位数小数）
                     result = float_pattern.sub(
-                        lambda m: f"{float(m.group(1)):.{precision}f}", 
-                        result
+                        lambda match: f"{float(match.group(1)):.{precision}f}",
+                        result,
                     )
                     fout.write(result)
-        
-        # 替换原文件
+
         if os.path.exists(output_file) and output_file != temp_file:
             os.remove(output_file)
         os.rename(temp_file, output_file)
-        
-    except Exception as e:
-        # 清理临时文件
+    except Exception:
         if os.path.exists(temp_file):
             os.remove(temp_file)
-        raise e
+        raise
+
+
+def _collect_dump_outputs(config_file_abs: str) -> list[str]:
+    output_files: list[str] = []
+    with open(config_file_abs, "r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if line.startswith("dump_result "):
+                output_files.append(line.split(None, 1)[1])
+    return output_files
 
 
 def run_solver(config_file: str, mode: str = "holdem", post_process: bool = None, output_dir: str = None) -> dict:
-    """
-    运行单个配置文件
-    
-    Args:
-        config_file: 配置文件路径
-        mode: 游戏模式 (holdem 或 shortdeck)
-        post_process: 是否进行后处理（格式化浮点数），默认使用全局配置 POST_PROCESS
-        output_dir: 结果输出目录，默认 RESULTS_DIR (results)
-        
-    Returns:
-        运行结果字典
-    """
+    """Run the console solver on a single config file."""
     if post_process is None:
         post_process = POST_PROCESS
     if not os.path.exists(config_file):
-        return {"success": False, "error": f"配置文件不存在: {config_file}"}
-    
-    # 检查求解器（如果不存在则自动编译）
+        return {"success": False, "error": f"Config file does not exist: {config_file}"}
     if not ensure_solver_exists():
-        return {"success": False, "error": f"求解器不可用: {SOLVER_EXE}"}
-    
+        return {"success": False, "error": f"Solver is not available: {SOLVER_EXE}"}
+
     results_dir = output_dir if output_dir is not None else RESULTS_DIR
-    
-    # 构建命令
-    cmd = [SOLVER_EXE, "-i", config_file, "-r", RESOURCE_DIR, "-m", mode]
-    
-    print(f"\n{'='*60}")
-    print(f"运行配置: {config_file}")
-    print(f"命令: {' '.join(cmd)}")
-    print(f"{'='*60}")
-    
+    config_file_abs = os.path.abspath(config_file)
+    cmd = [SOLVER_EXE, "-i", config_file_abs, "-r", RESOURCE_DIR, "-m", mode]
+
+    print(f"\n{'=' * 60}")
+    print(f"Running solver config: {config_file_abs}")
+    print(f"Output directory: {Path(results_dir).resolve()}")
+    print(f"Command: {' '.join(cmd)}")
+    print(f"{'=' * 60}")
+
     start_time = time.time()
-    
+    process = None
+
     try:
-        # 使用绝对路径
-        config_file_abs = os.path.abspath(config_file)
-        cmd = [SOLVER_EXE, "-i", config_file_abs, "-r", RESOURCE_DIR, "-m", mode]
-        
-        # 创建结果目录
         Path(results_dir).mkdir(parents=True, exist_ok=True)
-        
-        # 运行求解器（工作目录为结果目录，JSON 会保存在那里）
+
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
-            cwd=results_dir
+            cwd=results_dir,
         )
-        
-        # 实时打印进度（不存储，CFR结果由求解器直接写入JSON文件）
+
         for line in process.stdout:
-            print(line, end='')
-        
+            print(line, end="")
+
         process.wait(timeout=TIMEOUT)
         elapsed = time.time() - start_time
-        
-        if process.returncode == 0:
-            print(f"\n[完成] 耗时: {elapsed:.1f}秒")
-            
-            # 后处理：格式化当前生成的 JSON 文件中的浮点数
-            if post_process:
-                # 从配置文件中解析 dump_result 的输出文件名
-                output_files = []
-                with open(config_file_abs, 'r') as f:
-                    for line in f:
-                        line = line.strip()
-                        if line.startswith('dump_result '):
-                            output_files.append(line.split(None, 1)[1])
-                
-                for output_file in output_files:
-                    json_file = Path(results_dir) / output_file
-                    if json_file.exists():
-                        print(f"[后处理] 格式化浮点数: {json_file.name}")
-                        try:
-                            format_json_floats(str(json_file), precision=FLOAT_PRECISION)
-                        except Exception as e:
-                            print(f"  警告: 格式化失败 - {e}")
-            
-            return {
-                "success": True,
-                "elapsed": elapsed,
-                "config": config_file
-            }
-        else:
-            print(f"\n[错误] 返回码: {process.returncode}")
+
+        if process.returncode != 0:
+            print(f"\n[Error] Solver exited with code: {process.returncode}")
             return {
                 "success": False,
-                "error": f"返回码: {process.returncode}",
-                "config": config_file
+                "error": f"Solver exited with code: {process.returncode}",
+                "config": config_file_abs,
             }
-            
+
+        print(f"\n[Done] Elapsed: {elapsed:.1f}s")
+
+        if post_process:
+            for output_file in _collect_dump_outputs(config_file_abs):
+                result_file = Path(results_dir) / output_file
+                if not result_file.exists() or result_file.suffix.lower() != ".json":
+                    continue
+                print(f"[Post Process] Formatting JSON floats: {result_file.name}")
+                try:
+                    format_json_floats(str(result_file), precision=FLOAT_PRECISION)
+                except Exception as exc:
+                    print(f"  Warning: Failed to post-process {result_file.name}: {exc}")
+
+        return {
+            "success": True,
+            "elapsed": elapsed,
+            "config": config_file_abs,
+        }
     except subprocess.TimeoutExpired:
-        process.kill()
-        return {"success": False, "error": f"求解超时 (>{TIMEOUT}秒)", "config": config_file}
-    except Exception as e:
-        return {"success": False, "error": str(e), "config": config_file}
+        if process is not None:
+            process.kill()
+        return {
+            "success": False,
+            "error": f"Solver timed out (>{TIMEOUT}s)",
+            "config": config_file_abs,
+        }
+    except Exception as exc:
+        return {"success": False, "error": str(exc), "config": config_file_abs}
 
 
-def run_all_configs(pattern: str = "*.txt", post_process: bool = None):
-    """
-    运行 configs 目录下所有匹配的配置文件
-    
-    Args:
-        pattern: 文件匹配模式，默认 *.txt
-        post_process: 是否进行后处理，默认使用全局配置
-    """
+def run_all_configs(pattern: str = "*.txt", post_process: bool = None) -> None:
+    """Run every matching config file under the local config directory."""
     if post_process is None:
         post_process = POST_PROCESS
-    # 检查求解器（如果不存在则自动编译）
     if not ensure_solver_exists():
-        print(f"[错误] 求解器不可用: {SOLVER_EXE}")
+        print(f"[Error] Solver is not available: {SOLVER_EXE}")
         return
-    
     if not os.path.exists(RESOURCE_DIR):
-        print(f"[错误] Resources目录不存在: {RESOURCE_DIR}")
-        print("请修改脚本顶部的 RESOURCE_DIR 路径")
+        print(f"[Error] Resource directory does not exist: {RESOURCE_DIR}")
         return
-    
-    # 获取配置文件
+
     config_path = Path(CONFIG_DIR)
     if not config_path.exists():
-        print(f"[错误] 配置目录不存在: {CONFIG_DIR}")
+        print(f"[Error] Config directory does not exist: {CONFIG_DIR}")
         return
-    
+
     config_files = sorted(config_path.glob(pattern))
-    
     if not config_files:
-        print(f"未找到配置文件: {CONFIG_DIR}/{pattern}")
+        print(f"No config files matched: {CONFIG_DIR}/{pattern}")
         return
-    
-    # 创建结果目录
+
     Path(RESULTS_DIR).mkdir(exist_ok=True)
-    
-    print(f"\n找到 {len(config_files)} 个配置文件")
-    print("="*60)
-    
+    print(f"\nFound {len(config_files)} config file(s).")
+    print("=" * 60)
+
     results = []
     start_total = time.time()
-    
-    for i, config_file in enumerate(config_files, 1):
-        print(f"\n[{i}/{len(config_files)}] 处理: {config_file.name}")
-        
+
+    for index, config_file in enumerate(config_files, start=1):
+        print(f"\n[{index}/{len(config_files)}] Processing: {config_file.name}")
         result = run_solver(str(config_file), post_process=post_process)
         results.append(result)
-        
-        # 移动结果文件到 results 目录
-        if result["success"]:
-            # 查找可能的输出文件
-            config_dir = config_file.parent
-            for json_file in config_dir.glob("*.json"):
-                dst = Path(RESULTS_DIR) / json_file.name
-                try:
-                    json_file.rename(dst)
-                    print(f"  结果保存到: {dst}")
-                except:
-                    pass
-    
-    # 汇总
+
+        if not result["success"]:
+            continue
+
+        config_dir = config_file.parent
+        for result_file in list(config_dir.glob("*.json")) + list(config_dir.glob("*.parquet")):
+            destination = Path(RESULTS_DIR) / result_file.name
+            try:
+                result_file.rename(destination)
+                print(f"  Moved result file to: {destination}")
+            except Exception as exc:
+                print(f"  Warning: Failed to move result file {result_file} -> {destination}: {exc}")
+
     elapsed_total = time.time() - start_total
-    success_count = sum(1 for r in results if r["success"])
-    
-    print("\n" + "="*60)
-    print(f"批量运行完成!")
-    print(f"成功: {success_count}/{len(config_files)}")
-    print(f"总耗时: {elapsed_total/60:.1f} 分钟")
-    print("="*60)
+    success_count = sum(1 for result in results if result["success"])
+
+    print("\n" + "=" * 60)
+    print("Batch run finished.")
+    print(f"Successful runs: {success_count}/{len(config_files)}")
+    print(f"Total elapsed time: {elapsed_total / 60:.1f} min")
+    print("=" * 60)
 
 
-def main():
-    """主函数"""
-    print("="*60)
+def main() -> None:
+    """Command-line entry point."""
+    print("=" * 60)
     print("TexasSolver Console Runner")
-    print("="*60)
-    
-    # 解析 --no-post-process 选项
+    print("=" * 60)
+
     args = sys.argv[1:]
-    post_process = None  # 使用默认值
+    post_process = None
     if "--no-post-process" in args:
         post_process = False
         args.remove("--no-post-process")
     elif "--post-process" in args:
         post_process = True
         args.remove("--post-process")
-    
+
     if len(args) < 1:
-        # 显示帮助
-        print("\n用法:")
-        print(f"  python {sys.argv[0]} <配置文件>      - 运行单个配置文件")
-        print(f"  python {sys.argv[0]} all            - 运行 configs/*.txt 所有配置")
-        print(f"  python {sys.argv[0]} all config_*.txt  - 运行匹配模式的配置")
+        print("\nUsage:")
+        print(f"  python {sys.argv[0]} <config_file>          Run a single config file")
+        print(f"  python {sys.argv[0]} all                    Run every config in configs/*.txt")
+        print(f"  python {sys.argv[0]} all config_*.txt       Run configs matching a glob pattern")
         print()
-        print("选项:")
-        print("  --no-post-process  禁用后处理（不格式化JSON浮点数）")
-        print("  --post-process     启用后处理（默认）")
+        print("Options:")
+        print("  --no-post-process  Skip JSON float formatting after solving")
+        print("  --post-process     Force JSON float formatting after solving")
         print()
-        print("示例:")
+        print("Examples:")
         print(f"  python {sys.argv[0]} configs/sia_sod_template.txt")
         print(f"  python {sys.argv[0]} configs/sia_sod_template.txt --no-post-process")
         print(f"  python {sys.argv[0]} all")
         print(f"  python {sys.argv[0]} all sia_*.txt")
         return
-    
+
     arg = args[0]
-    
     if arg == "all":
-        # 批量运行
         pattern = args[1] if len(args) > 1 else "*.txt"
         run_all_configs(pattern, post_process=post_process)
-    else:
-        # 运行单个文件
-        result = run_solver(arg, post_process=post_process)
-        if not result["success"]:
-            print(f"\n[失败] {result.get('error', '未知错误')}")
-            sys.exit(1)
+        return
+
+    result = run_solver(arg, post_process=post_process)
+    if not result["success"]:
+        print(f"\n[Failed] {result.get('error', 'Unknown error')}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

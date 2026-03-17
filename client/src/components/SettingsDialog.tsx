@@ -1,9 +1,12 @@
 import { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
+import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import type { TestConfig } from '@/types/poker';
+import { normalizeTestConfig } from '@/lib/test-config';
+import { FRONTEND_TABLE_CONFIG } from '@/config/frontend-config';
 
 interface NetworkTestResult {
   status: 'pending' | 'ok' | 'failed' | 'idle';
@@ -28,26 +31,26 @@ export function SettingsDialog({
   testConfig,
   onTestConfigChange,
 }: SettingsDialogProps) {
+  const isTestFeatureEnabled = import.meta.env.DEV || import.meta.env.VITE_ENABLE_TEST_FEATURES === 'true';
   const [tempSizes, setTempSizes] = useState<number[]>(quickBetSizes);
-  const [tempTestConfig, setTempTestConfig] = useState<TestConfig>(testConfig);
+  const [tempTestConfig, setTempTestConfig] = useState<TestConfig>(normalizeTestConfig(testConfig));
 
   const [hfTest, setHfTest] = useState<NetworkTestResult>({ status: 'idle' });
   const [mirrorTest, setMirrorTest] = useState<NetworkTestResult>({ status: 'idle' });
 
   useEffect(() => {
     setTempSizes(quickBetSizes);
-    setTempTestConfig(testConfig);
+    setTempTestConfig(normalizeTestConfig(testConfig));
   }, [quickBetSizes, testConfig, isOpen]);
 
   const handleSave = () => {
     onQuickBetSizesChange(tempSizes);
-    localStorage.setItem('poker_quick_bet_sizes', JSON.stringify(tempSizes));
-    onTestConfigChange(tempTestConfig);
+    onTestConfigChange(normalizeTestConfig(tempTestConfig));
     onClose();
   };
 
   const handleReset = () => {
-    const defaultSizes = [33, 50, 75, 100, 125, 150, 175, 200];
+    const defaultSizes = [...FRONTEND_TABLE_CONFIG.defaultQuickBetPercentages];
     setTempSizes(defaultSizes);
   };
 
@@ -96,7 +99,7 @@ export function SettingsDialog({
               <div className="flex items-center justify-between">
                 <div>
                   <Label className="text-sm font-medium">对战位置</Label>
-                  <p className="text-xs text-gray-500">当前仅支持 BB vs UTG</p>
+                  <p className="text-xs text-gray-500">当前仅支持 UTG / BB 对战</p>
                 </div>
                 <div className="bg-[#1a1a1a] border border-[#333333] rounded px-3 py-2 text-sm text-gray-300">
                   {tempTestConfig.heroPosition} vs {tempTestConfig.villainPosition}
@@ -194,7 +197,7 @@ export function SettingsDialog({
                 <input
                   type="checkbox"
                   checked={tempTestConfig.heroActsFirst === false}
-                  onChange={(e) => setTempTestConfig(prev => ({ ...prev, heroActsFirst: !e.target.checked }))}
+                  onChange={(e) => setTempTestConfig(prev => normalizeTestConfig({ ...prev, heroActsFirst: !e.target.checked }))}
                   className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#00d084]"
                 />
               </div>
@@ -335,6 +338,69 @@ export function SettingsDialog({
               <p className="text-[10px] text-gray-500 pt-1">注意：当从HuggingFace下载数据失败时，会自动尝试镜像源</p>
 
               {/* Dataset Source Selection */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Label className="text-sm font-medium">明牌展示对手手牌</Label>
+                    <Badge variant="outline" className="border-[#ff8c00]/40 text-[#ffb347]">
+                      测试功能
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    仅测试阶段可用，牌局进行中直接显示对手 hole cards
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={isTestFeatureEnabled && (tempTestConfig.showFaceUpOpponentCards ?? false)}
+                  disabled={!isTestFeatureEnabled}
+                  onChange={(e) => setTempTestConfig(prev => ({ ...prev, showFaceUpOpponentCards: e.target.checked }))}
+                  className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#ff8c00] disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Label className="text-sm font-medium">AI 决策来源备注到行动历史</Label>
+                    <Badge variant="outline" className="border-[#ff8c00]/40 text-[#ffb347]">
+                      测试功能
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    仅测试阶段可用，在 AI 行动历史同一行显示 GTO exact、MDF override、fallback 等决策来源
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={isTestFeatureEnabled && (tempTestConfig.showAIDecisionNotes ?? false)}
+                  disabled={!isTestFeatureEnabled}
+                  onChange={(e) => setTempTestConfig(prev => ({ ...prev, showAIDecisionNotes: e.target.checked }))}
+                  className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#ff8c00] disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Label className="text-sm font-medium">River LLM Exploit (AI Only)</Label>
+                    <Badge variant="outline" className="border-[#ff8c00]/40 text-[#ffb347]">
+                      测试功能
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    仅测试阶段可用，River 阶段使用 LLM 进行策略调整，并在 message input、reasoning output、final output 中显示决策来源
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={isTestFeatureEnabled && (tempTestConfig.enableRiverLLMExploit ?? false)}
+                  disabled={!isTestFeatureEnabled}
+                  onChange={(e) => setTempTestConfig(prev => ({ ...prev, enableRiverLLMExploit: e.target.checked }))}
+                  className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#ff8c00] disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+              </div>
+
               <div className="border-t border-[#333333] pt-4 mt-4">
                 <Label className="text-sm font-medium block mb-3">默认下载源设定</Label>
                 <div className="flex flex-col gap-2">
@@ -377,8 +443,9 @@ export function SettingsDialog({
                 </div>
                 <input
                   type="checkbox"
-                  defaultChecked
-                  className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333]"
+                  checked={tempTestConfig.showOpponentCards ?? true}
+                  onChange={(e) => setTempTestConfig(prev => ({ ...prev, showOpponentCards: e.target.checked }))}
+                  className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#00d084]"
                 />
               </div>
 
