@@ -954,6 +954,7 @@ export default function GameTable() {
   const showFaceUpOpponentCards = isTestFeatureEnabled && (testConfig.showFaceUpOpponentCards ?? false);
   const showAIDecisionNotes = isTestFeatureEnabled && (testConfig.showAIDecisionNotes ?? false);
   const enableRiverLLMExploit = isTestFeatureEnabled && (testConfig.enableRiverLLMExploit ?? false);
+  const enableRiverLLMReasoning = enableRiverLLMExploit && (testConfig.enableRiverLLMReasoning ?? false);
   const [riverExploitTraces, setRiverExploitTraces] = useState<RiverExploitTrace[]>(() =>
     FRONTEND_TABLE_CONFIG.supportedTableCounts.map(() => createEmptyRiverExploitTrace())
   );
@@ -970,6 +971,7 @@ export default function GameTable() {
   );
   const latestTestConfigRef = useRef(testConfig);
   const enableRiverLLMExploitRef = useRef(enableRiverLLMExploit);
+  const enableRiverLLMReasoningRef = useRef(enableRiverLLMReasoning);
 
   useEffect(() => {
     latestTablesRef.current = tables;
@@ -1001,7 +1003,8 @@ export default function GameTable() {
   useEffect(() => {
     latestTestConfigRef.current = testConfig;
     enableRiverLLMExploitRef.current = enableRiverLLMExploit;
-  }, [enableRiverLLMExploit, testConfig]);
+    enableRiverLLMReasoningRef.current = enableRiverLLMReasoning;
+  }, [enableRiverLLMExploit, enableRiverLLMReasoning, testConfig]);
 
   useEffect(() => {
     setRiverExploitTraces(prev => {
@@ -1173,6 +1176,7 @@ export default function GameTable() {
           villainPosition: villainInfo.position,
           actorPosition: villainInfo.position,
           opponentPosition: heroInfo.position,
+          enableReasoning: enableRiverLLMReasoningRef.current,
         }),
       });
 

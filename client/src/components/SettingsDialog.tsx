@@ -401,6 +401,32 @@ export function SettingsDialog({
                 />
               </div>
 
+              <div className="ml-5 rounded-lg border border-[#222222] bg-black/20 px-4 py-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Label className="text-sm font-medium">Enable LLM Reasoning</Label>
+                      <Badge variant="outline" className="border-[#ff8c00]/40 text-[#ffb347]">
+                        Test Feature
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      Optional child setting for river exploit. When disabled, the LLM skips the reasoning process and only returns the final output. Default: off.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={
+                      isTestFeatureEnabled &&
+                      (tempTestConfig.enableRiverLLMReasoning ?? false)
+                    }
+                    disabled={!isTestFeatureEnabled || !(tempTestConfig.enableRiverLLMExploit ?? false)}
+                    onChange={(e) => setTempTestConfig(prev => ({ ...prev, enableRiverLLMReasoning: e.target.checked }))}
+                    className="w-5 h-5 rounded bg-[#1a1a1a] border-[#333333] accent-[#ff8c00] disabled:opacity-50 disabled:cursor-not-allowed"
+                  />
+                </div>
+              </div>
+
               <div className="border-t border-[#333333] pt-4 mt-4">
                 <Label className="text-sm font-medium block mb-3">默认下载源设定</Label>
                 <div className="flex flex-col gap-2">

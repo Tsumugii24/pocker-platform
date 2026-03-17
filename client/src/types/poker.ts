@@ -51,6 +51,7 @@ export interface TestConfig {
   showFaceUpOpponentCards?: boolean;
   showAIDecisionNotes?: boolean;
   enableRiverLLMExploit?: boolean;
+  enableRiverLLMReasoning?: boolean;
 }
 
 export const DEFAULT_TEST_CONFIG: TestConfig = {
@@ -68,6 +69,7 @@ export const DEFAULT_TEST_CONFIG: TestConfig = {
   showFaceUpOpponentCards: false,
   showAIDecisionNotes: false,
   enableRiverLLMExploit: false,
+  enableRiverLLMReasoning: false,
 };
 
 export interface Player {

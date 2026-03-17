@@ -924,6 +924,10 @@ def river_exploit_stream():
         villain_position = str(data.get("villainPosition") or data.get("villain_position") or "UTG")
         actor_position = str(data.get("actorPosition") or data.get("actor_position") or villain_position)
         opponent_position = str(data.get("opponentPosition") or data.get("opponent_position") or hero_position)
+        reasoning_override_raw = data.get("enableReasoning")
+        if reasoning_override_raw is None:
+            reasoning_override_raw = data.get("enable_reasoning")
+        reasoning_override = None if reasoning_override_raw is None else bool(reasoning_override_raw)
 
         from river_llm_exploit import (
             SYSTEM_PROMPT,
@@ -948,7 +952,7 @@ def river_exploit_stream():
             baseline_source=strategy_context.get("decision_source", "fallback_default"),
             baseline_detail=strategy_context.get("decision_detail", "No baseline was available."),
         )
-        reasoning_supported = is_reasoning_enabled()
+        reasoning_supported = is_reasoning_enabled(reasoning_override)
 
         @stream_with_context
         def generate():
@@ -985,6 +989,7 @@ def river_exploit_stream():
                 llm_stream, model = stream_reasoning_and_output(
                     system_prompt=SYSTEM_PROMPT,
                     user_prompt=user_prompt,
+                    reasoning_enabled=reasoning_override,
                 )
                 print(f"[River LLM] Starting exploit stream for {ai_hand} with model: {model}")
                 yield _stream_json_line(
