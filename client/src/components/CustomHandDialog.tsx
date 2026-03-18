@@ -40,30 +40,47 @@ export function CustomHandDialog({
     const [cachedBoards, setCachedBoards] = useState<string[]>([]);
 
     useEffect(() => {
-        if (isOpen) {
-            setSlots(Array(slotCount).fill(null));
-            setActiveSlot(0);
-
-            if (solvedBoards.length === 0) {
-                const url = datasetSource ? `/api/solved-boards?source=${datasetSource}` : '/api/solved-boards';
-                fetch(url)
-                    .then(res => res.json())
-                    .then(data => {
-                        if (data.boards) setSolvedBoards(data.boards);
-                    })
-                    .catch(console.error);
-            }
-
-            if (cachedBoards.length === 0) {
-                fetch('/api/cached-boards')
-                    .then(res => res.json())
-                    .then(data => {
-                        if (data.boards) setCachedBoards(data.boards);
-                    })
-                    .catch(console.error);
-            }
+        if (!isOpen) {
+            return;
         }
-    }, [isOpen, slotCount, solvedBoards.length, cachedBoards.length]);
+
+        let cancelled = false;
+        setSlots(Array(slotCount).fill(null));
+        setActiveSlot(0);
+
+        const solvedBoardsUrl = datasetSource ? `/api/solved-boards?source=${datasetSource}` : '/api/solved-boards';
+        fetch(solvedBoardsUrl)
+            .then(res => res.json())
+            .then(data => {
+                if (!cancelled) {
+                    setSolvedBoards(Array.isArray(data.boards) ? data.boards : []);
+                }
+            })
+            .catch(error => {
+                if (!cancelled) {
+                    console.error(error);
+                }
+            });
+
+        if (cachedBoards.length === 0) {
+            fetch('/api/cached-boards')
+                .then(res => res.json())
+                .then(data => {
+                    if (!cancelled && data.boards) {
+                        setCachedBoards(data.boards);
+                    }
+                })
+                .catch(error => {
+                    if (!cancelled) {
+                        console.error(error);
+                    }
+                });
+        }
+
+        return () => {
+            cancelled = true;
+        };
+    }, [isOpen, slotCount, datasetSource, cachedBoards.length]);
 
     const handleCardClick = (card: Card) => {
         const isSelectedIdx = slots.findIndex(

@@ -1068,7 +1068,6 @@ def river_exploit_stream():
         return jsonify({"error": str(exc)}), 500
 
 
-@functools.lru_cache(maxsize=2)
 def _get_solved_boards_from_hf(preferred_source=None):
     from runtime_config import get_dataset_repo_id, get_download_source_config, list_download_source_names
 
