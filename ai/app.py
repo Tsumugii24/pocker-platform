@@ -1077,8 +1077,15 @@ def _get_solved_boards_from_hf(preferred_source=None):
         from huggingface_hub import HfApi
 
         api = HfApi(endpoint=endpoint) if endpoint else HfApi()
-        files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
-        return [file.split(".")[0] for file in files if file.endswith(".parquet")]
+        if hasattr(api, "list_repo_tree"):
+            file_paths: list[str] = []
+            for entry in api.list_repo_tree(repo_id=repo_id, repo_type="dataset", recursive=True):
+                path = getattr(entry, "path", None)
+                if isinstance(path, str):
+                    file_paths.append(path)
+        else:
+            file_paths = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
+        return [file.split(".")[0] for file in file_paths if file.endswith(".parquet")]
 
     last_error = None
     for source_name in list_download_source_names(preferred_source):

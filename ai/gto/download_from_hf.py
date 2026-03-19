@@ -70,7 +70,14 @@ def list_repo_files_with_fallback(repo_id: str, preferred_source: str = None) ->
         endpoint = _get_endpoint_for_source(source_name)
         try:
             api = HfApi(endpoint=endpoint) if endpoint else HfApi()
-            files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
+            if hasattr(api, "list_repo_tree"):
+                files = []
+                for entry in api.list_repo_tree(repo_id=repo_id, repo_type="dataset", recursive=True):
+                    path = getattr(entry, "path", None)
+                    if isinstance(path, str):
+                        files.append(path)
+            else:
+                files = api.list_repo_files(repo_id=repo_id, repo_type="dataset")
             return files, source_name, None
         except Exception as exc:
             last_error = exc
