@@ -1,6 +1,6 @@
 {
   "solver": {
-    "realtime_dump_format": "auto"
+    "realtime_dump_format": "json"
   },
   "llm": {
     "river_exploit": {
