@@ -28,6 +28,29 @@ FLOAT_PRECISION = 3
 POST_PROCESS = False
 
 
+def _ensure_executable(path: str) -> bool:
+    """Ensure a solver binary is executable on the current platform."""
+    if not os.path.exists(path):
+        return False
+
+    if IS_WINDOWS or os.access(path, os.X_OK):
+        return True
+
+    try:
+        current_mode = Path(path).stat().st_mode
+        Path(path).chmod(current_mode | 0o111)
+    except Exception as exc:
+        print(f"[Error] Failed to add execute permission for solver: {exc}")
+        return False
+
+    if os.access(path, os.X_OK):
+        print(f"[Fix] Added execute permission to solver binary: {path}")
+        return True
+
+    print(f"[Error] Solver exists but is still not executable: {path}")
+    return False
+
+
 def auto_compile_solver() -> bool:
     """Compile the solver executable for the current platform."""
     print("\n" + "=" * 60)
@@ -89,11 +112,11 @@ def auto_compile_solver() -> bool:
 
 def ensure_solver_exists() -> bool:
     """Ensure the solver executable exists, compiling it if necessary."""
-    if os.path.exists(SOLVER_EXE):
+    if _ensure_executable(SOLVER_EXE):
         return True
 
-    print(f"[Warning] Solver executable was not found: {SOLVER_EXE}")
-    if auto_compile_solver() and os.path.exists(SOLVER_EXE):
+    print(f"[Warning] Solver executable is missing or not executable: {SOLVER_EXE}")
+    if auto_compile_solver() and _ensure_executable(SOLVER_EXE):
         return True
 
     print(f"[Error] Solver is still unavailable after the build attempt: {SOLVER_EXE}")
