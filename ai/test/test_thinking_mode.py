@@ -19,7 +19,7 @@ client = OpenAI(
     base_url=base_url
 )
 
-model = str(river_config.get("model") or "Qwen/Qwen3.5-27B")
+model = str(river_config.get("model") or "Qwen/Qwen3-32B")
 extra_body = river_config.get("extra_body") or {"enable_thinking": True}
 
 print(f"Testing model: {model}")

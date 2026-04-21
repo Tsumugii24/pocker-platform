@@ -6,6 +6,7 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import type { TestConfig } from '@/types/poker';
 import { normalizeTestConfig } from '@/lib/test-config';
+import { getRiverExploitModelById, RIVER_EXPLOIT_MODELS } from '@/lib/llm-models';
 import { FRONTEND_TABLE_CONFIG } from '@/config/frontend-config';
 
 interface NetworkTestResult {
@@ -36,6 +37,8 @@ export function SettingsDialog({
   const testFeatureCheckboxClassName = `${checkboxClassName} accent-[#ff8c00] disabled:cursor-not-allowed disabled:opacity-50`;
   const [tempSizes, setTempSizes] = useState<number[]>(quickBetSizes);
   const [tempTestConfig, setTempTestConfig] = useState<TestConfig>(normalizeTestConfig(testConfig));
+  const selectedRiverModel = getRiverExploitModelById(tempTestConfig.riverExploitModel);
+  const supportsRiverReasoning = selectedRiverModel.supportsThinking;
 
   const [hfTest, setHfTest] = useState<NetworkTestResult>({ status: 'idle' });
   const [mirrorTest, setMirrorTest] = useState<NetworkTestResult>({ status: 'idle' });
@@ -44,6 +47,12 @@ export function SettingsDialog({
     setTempSizes(quickBetSizes);
     setTempTestConfig(normalizeTestConfig(testConfig));
   }, [quickBetSizes, testConfig, isOpen]);
+
+  useEffect(() => {
+    if (!supportsRiverReasoning && tempTestConfig.enableRiverLLMReasoning) {
+      setTempTestConfig(prev => ({ ...prev, enableRiverLLMReasoning: false }));
+    }
+  }, [supportsRiverReasoning, tempTestConfig.enableRiverLLMReasoning]);
 
   const handleSave = () => {
     onQuickBetSizesChange(tempSizes);
@@ -407,6 +416,80 @@ export function SettingsDialog({
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <div className="flex items-center gap-2">
+                      <Label className="text-sm font-medium">River Exploit Model</Label>
+                      <Badge variant="outline" className="border-[#ff8c00]/40 text-[#ffb347]">
+                        Test Feature
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      Select the model used by the river exploit call. The default follows the playground model list.
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
+                      <span className="rounded-full border border-[#333333] px-2 py-1 text-gray-400">
+                        {selectedRiverModel.size}B
+                      </span>
+                      <span className={`rounded-full border px-2 py-1 ${supportsRiverReasoning ? 'border-[#4ea1ff]/40 text-[#8bc2ff]' : 'border-[#333333] text-gray-500'}`}>
+                        Thinking {supportsRiverReasoning ? 'on' : 'off'}
+                      </span>
+                      <span className={`rounded-full border px-2 py-1 ${selectedRiverModel.supportsVision ? 'border-[#00d084]/40 text-[#7af0b5]' : 'border-[#333333] text-gray-500'}`}>
+                        Vision {selectedRiverModel.supportsVision ? 'on' : 'off'}
+                      </span>
+                    </div>
+                  </div>
+                  <select
+                    value={tempTestConfig.riverExploitModel || selectedRiverModel.id}
+                    disabled={!isTestFeatureEnabled || !(tempTestConfig.enableRiverLLMExploit ?? false)}
+                    onChange={(e) => setTempTestConfig(prev => ({
+                      ...prev,
+                      riverExploitModel: e.target.value,
+                    }))}
+                    className="min-w-[240px] rounded border border-[#333333] bg-[#1a1a1a] px-3 py-2 text-sm text-gray-300 focus:outline-none focus:border-[#00d084] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {RIVER_EXPLOIT_MODELS.map(model => (
+                      <option key={model.id} value={model.id}>
+                        {model.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="ml-5 rounded-lg border border-[#222222] bg-black/20 px-4 py-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Label className="text-sm font-medium">River Exploit Timeout</Label>
+                      <Badge variant="outline" className="border-[#ff8c00]/40 text-[#ffb347]">
+                        Test Feature
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      Default is 60 seconds. This value is sent to the backend and also controls the frontend stream timeout.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number"
+                      min="1"
+                      max="600"
+                      step="1"
+                      value={tempTestConfig.riverExploitTimeoutSeconds ?? 60}
+                      disabled={!isTestFeatureEnabled || !(tempTestConfig.enableRiverLLMExploit ?? false)}
+                      onChange={(e) => setTempTestConfig(prev => ({
+                        ...prev,
+                        riverExploitTimeoutSeconds: Number.parseInt(e.target.value, 10) || 60,
+                      }))}
+                      className="w-24 bg-[#1a1a1a] border-[#333333] text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    />
+                    <span className="text-sm text-gray-400">s</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="ml-5 rounded-lg border border-[#222222] bg-black/20 px-4 py-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
                       <Label className="text-sm font-medium">Enable LLM Reasoning</Label>
                       <Badge variant="outline" className="border-[#ff8c00]/40 text-[#ffb347]">
                         Test Feature
@@ -422,7 +505,11 @@ export function SettingsDialog({
                       isTestFeatureEnabled &&
                       (tempTestConfig.enableRiverLLMReasoning ?? false)
                     }
-                    disabled={!isTestFeatureEnabled || !(tempTestConfig.enableRiverLLMExploit ?? false)}
+                    disabled={
+                      !isTestFeatureEnabled ||
+                      !(tempTestConfig.enableRiverLLMExploit ?? false) ||
+                      !supportsRiverReasoning
+                    }
                     onChange={(e) => setTempTestConfig(prev => ({ ...prev, enableRiverLLMReasoning: e.target.checked }))}
                     className={testFeatureCheckboxClassName}
                   />

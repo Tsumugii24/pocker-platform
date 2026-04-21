@@ -50,6 +50,7 @@ import {
   FRONTEND_STORAGE_CONFIG,
   FRONTEND_TABLE_CONFIG,
 } from '@/config/frontend-config';
+import { DEFAULT_RIVER_EXPLOIT_TIMEOUT_SECONDS } from '@/lib/llm-models';
 
 // ─── TableView Component ─────────────────────────────────────────────────────
 
@@ -862,7 +863,6 @@ type RiverExploitEvent =
   | { type: 'error'; message?: string }
   | { type: 'complete'; status?: string };
 
-const RIVER_REASONING_TIMEOUT_MS = FRONTEND_RIVER_EXPLOIT_CONFIG.reasoningTimeoutMs;
 const RIVER_EXPLOIT_STALE_REQUEST = FRONTEND_RIVER_EXPLOIT_CONFIG.staleRequestMarker;
 
 function createEmptyRiverExploitTrace(): RiverExploitTrace {
@@ -1094,6 +1094,12 @@ export default function GameTable() {
     path: string[],
     villainHole: string,
   ): Promise<OpponentDecision | null> => {
+    const configuredTimeoutSecondsRaw = Number(latestTestConfigRef.current.riverExploitTimeoutSeconds);
+    const timeoutSeconds = Number.isFinite(configuredTimeoutSecondsRaw)
+      ? Math.min(Math.max(Math.round(configuredTimeoutSecondsRaw), 1), 600)
+      : DEFAULT_RIVER_EXPLOIT_TIMEOUT_SECONDS;
+    const riverReasoningTimeoutMs = timeoutSeconds * 1000;
+    const selectedRiverExploitModel = latestTestConfigRef.current.riverExploitModel ?? null;
     const requestId = riverExploitRequestIdsRef.current[tableIndex] + 1;
     riverExploitRequestIdsRef.current[tableIndex] = requestId;
     riverExploitAbortControllersRef.current[tableIndex]?.abort('superseded');
@@ -1101,7 +1107,7 @@ export default function GameTable() {
     const abortController = new AbortController();
     riverExploitAbortControllersRef.current[tableIndex] = abortController;
     const reasoningStartedAt = Date.now();
-    const reasoningLimitLabel = `${(RIVER_REASONING_TIMEOUT_MS / 1000).toFixed(0)}s`;
+    const reasoningLimitLabel = `${timeoutSeconds.toFixed(0)}s`;
     let reasoningTimeoutHandle: number | null = null;
     let finalDecision: OpponentDecision | null = null;
 
@@ -1130,7 +1136,7 @@ export default function GameTable() {
     safeUpdate(() => ({
       tableId: tableToAct.id,
       status: 'loading',
-      model: null,
+      model: selectedRiverExploitModel,
       reasoningSupported: null,
       systemMarkdown: '',
       userMarkdown: '',
@@ -1138,7 +1144,7 @@ export default function GameTable() {
       finalMarkdown: '',
       reasoningStartedAt,
       reasoningCompletedAt: null,
-      reasoningTimeoutMs: RIVER_REASONING_TIMEOUT_MS,
+      reasoningTimeoutMs: riverReasoningTimeoutMs,
       parsedStrategy: null,
       action: null,
       decisionSource: null,
@@ -1153,12 +1159,12 @@ export default function GameTable() {
       safeUpdate(trace => ({
         ...trace,
         status: 'error',
-        reasoningCompletedAt: trace.reasoningCompletedAt ?? (reasoningStartedAt + RIVER_REASONING_TIMEOUT_MS),
+        reasoningCompletedAt: trace.reasoningCompletedAt ?? (reasoningStartedAt + riverReasoningTimeoutMs),
         warning: trace.warning ?? `Reasoning exceeded the ${reasoningLimitLabel} limit. Falling back to the baseline strategy.`,
         error: `The river exploit stream exceeded the ${reasoningLimitLabel} reasoning limit.`,
       }));
       abortController.abort('timeout');
-    }, RIVER_REASONING_TIMEOUT_MS);
+    }, riverReasoningTimeoutMs);
 
     try {
       const response = await fetch('/api/river-exploit-stream', {
@@ -1178,6 +1184,8 @@ export default function GameTable() {
           opponentPosition: heroInfo.position,
           enableReasoning: enableRiverLLMReasoningRef.current,
           promptLanguage: latestTestConfigRef.current.riverExploitPromptLanguage ?? 'en',
+          model: selectedRiverExploitModel,
+          timeoutSeconds,
         }),
       });
 

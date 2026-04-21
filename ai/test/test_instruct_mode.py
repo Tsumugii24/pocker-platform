@@ -34,7 +34,7 @@ messages=[
 
 # thinking mode
 response = client.chat.completions.create(
-    model=str(river_config.get("model") or "Qwen/Qwen3.5-27B"),
+    model=str(river_config.get("model") or "Qwen/Qwen3-32B"),
     messages=messages
 )
 

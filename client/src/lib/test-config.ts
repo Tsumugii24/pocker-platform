@@ -4,6 +4,11 @@ import {
   type RiverExploitPromptLanguage,
   type TestConfig,
 } from '@/types/poker';
+import {
+  DEFAULT_RIVER_EXPLOIT_MODEL_ID,
+  DEFAULT_RIVER_EXPLOIT_TIMEOUT_SECONDS,
+  getRiverExploitModelById,
+} from '@/lib/llm-models';
 
 interface EffectivePositions {
   heroPosition: Position;
@@ -25,10 +30,20 @@ export function normalizeTestConfig(config?: Partial<TestConfig>): TestConfig {
   };
   const promptLanguage: RiverExploitPromptLanguage =
     merged.riverExploitPromptLanguage === 'zh' ? 'zh' : 'en';
+  const selectedModel = getRiverExploitModelById(merged.riverExploitModel);
+  const normalizedTimeoutSecondsRaw = Number(merged.riverExploitTimeoutSeconds);
+  const normalizedTimeoutSeconds = Number.isFinite(normalizedTimeoutSecondsRaw)
+    ? Math.min(Math.max(Math.round(normalizedTimeoutSecondsRaw), 1), 600)
+    : DEFAULT_RIVER_EXPLOIT_TIMEOUT_SECONDS;
 
   return {
     ...merged,
+    enableRiverLLMReasoning: selectedModel.supportsThinking
+      ? Boolean(merged.enableRiverLLMReasoning)
+      : false,
     riverExploitPromptLanguage: promptLanguage,
+    riverExploitModel: selectedModel.id ?? DEFAULT_RIVER_EXPLOIT_MODEL_ID,
+    riverExploitTimeoutSeconds: normalizedTimeoutSeconds,
     ...getEffectivePositions(merged),
   };
 }

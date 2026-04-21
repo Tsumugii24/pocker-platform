@@ -177,6 +177,19 @@ def _get_legacy_dataset_cache_dir() -> Path:
     return gto_dir / "cache"
 
 
+def _list_cached_board_names() -> set[str]:
+    dataset_cache_dir = _get_dataset_cache_dir()
+    legacy_cache_dir = _get_legacy_dataset_cache_dir()
+    board_names: set[str] = set()
+    for cache_root in (dataset_cache_dir, legacy_cache_dir):
+        if not cache_root.exists():
+            continue
+        for file in cache_root.glob("*.parquet"):
+            if file.is_file():
+                board_names.add(file.stem)
+    return board_names
+
+
 def _resolve_existing_dataset_file(flop_cards: list[str]) -> tuple[Path | None, str]:
     requested_board = "".join(flop_cards)
     dataset_cache_dir = _get_dataset_cache_dir()
@@ -1178,6 +1191,12 @@ def river_exploit_stream():
         prompt_language_raw = data.get("promptLanguage")
         if prompt_language_raw is None:
             prompt_language_raw = data.get("prompt_language")
+        model_raw = data.get("model")
+        if model_raw is None:
+            model_raw = data.get("riverExploitModel")
+        timeout_seconds_raw = data.get("timeoutSeconds")
+        if timeout_seconds_raw is None:
+            timeout_seconds_raw = data.get("timeout_seconds")
         reasoning_override_raw = data.get("enableReasoning")
         if reasoning_override_raw is None:
             reasoning_override_raw = data.get("enable_reasoning")
@@ -1190,11 +1209,19 @@ def river_exploit_stream():
             is_reasoning_enabled,
             normalize_prompt_language,
             normalize_frequency_map,
+            normalize_timeout_seconds,
             stream_reasoning_and_output,
         )
         prompt_language = normalize_prompt_language(
             None if prompt_language_raw is None else str(prompt_language_raw)
         )
+        selected_model = None if model_raw is None else str(model_raw).strip()
+        if selected_model == "":
+            selected_model = None
+        try:
+            timeout_seconds = normalize_timeout_seconds(timeout_seconds_raw)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         system_prompt = get_system_prompt(prompt_language)
 
         user_prompt = build_user_prompt(
@@ -1249,9 +1276,14 @@ def river_exploit_stream():
                 llm_stream, model = stream_reasoning_and_output(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
+                    model=selected_model,
                     reasoning_enabled=reasoning_override,
+                    timeout_seconds=timeout_seconds,
                 )
-                print(f"[River LLM] Starting exploit stream for {ai_hand} with model: {model}")
+                print(
+                    f"[River LLM] Starting exploit stream for {ai_hand} "
+                    f"with model: {model}, timeout: {timeout_seconds:.1f}s"
+                )
                 yield _stream_json_line(
                     "meta",
                     model=model,
@@ -1358,21 +1390,38 @@ def get_solved_boards():
 @app.route("/api/cached-boards", methods=["GET"])
 def get_cached_boards():
     """List all cached dataset parquet files under cache/dataset, with legacy fallback."""
-    dataset_cache_dir = _get_dataset_cache_dir()
-    legacy_cache_dir = _get_legacy_dataset_cache_dir()
-    if not dataset_cache_dir.exists() and not legacy_cache_dir.exists():
-        return jsonify({"boards": []}), 200
+    boards = sorted(_list_cached_board_names(), key=str.lower)
+    return jsonify({"boards": boards}), 200
 
-    board_names: set[str] = set()
-    for cache_root in (dataset_cache_dir, legacy_cache_dir):
-        if not cache_root.exists():
-            continue
-        for file in cache_root.glob("*.parquet"):
-            if file.is_file():
-                board_names.add(file.stem)
 
-    boards = sorted(board_names, key=str.lower)
-    return jsonify({"boards": sorted(boards, key=str.lower)}), 200
+@app.route("/api/flop-isomorphism", methods=["POST"])
+def get_flop_isomorphism():
+    data = request.json or {}
+    board_str = str(data.get("board") or "")
+    board_cards = [card.strip() for card in board_str.split(",") if card.strip()]
+    if len(board_cards) != 3:
+        return jsonify({"error": "Flop isomorphism requires exactly 3 board cards."}), 400
+
+    try:
+        normalized_cards = list(normalize_board_cards(board_cards))
+        mapping = solve_flop_isomorphism(normalized_cards)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    cached_board_names = _list_cached_board_names()
+    canonical_flop = mapping.canonical_flop
+    return jsonify(
+        {
+            "actualFlop": "".join(normalized_cards),
+            "canonicalFlop": canonical_flop,
+            "canonicalFlopCards": list(mapping.canonical_ordered_flop_cards),
+            "actualFlopCards": list(mapping.actual_ordered_flop_cards),
+            "cached": canonical_flop in cached_board_names,
+            "cachedBoardCount": len(cached_board_names),
+        }
+    ), 200
 
 
 @app.route("/api/test-hf-connection", methods=["GET"])

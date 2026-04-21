@@ -21,7 +21,7 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     },
     "llm": {
         "river_exploit": {
-            "model": "Qwen/Qwen3.5-27B",
+            "model": "Qwen/Qwen3-32B",
             "timeout_seconds": 60,
             "extra_body": {
                 "enable_thinking": True,
@@ -29,7 +29,7 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
         }
     },
     "downloads": {
-        "dataset_repo": "Tsumugii/gto-srp-100bb-v1",
+        "dataset_repo": "Tsumugii/sia-100bb",
         "default_source": "huggingface",
         "mirror_source": "hf-mirror",
         "backup_source": "backup",

@@ -41,7 +41,6 @@ export const FRONTEND_SIDEBAR_CONFIG = {
 } as const;
 
 export const FRONTEND_RIVER_EXPLOIT_CONFIG = {
-  reasoningTimeoutMs: 60000,
   staleRequestMarker: '__river_exploit_stale_request__',
 } as const;
 
