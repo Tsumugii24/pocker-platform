@@ -60,6 +60,13 @@ def _append_dump_config(new_lines: list[str], dump_format: str, dump_name: str) 
     new_lines.append(f"dump_result {dump_name}\n")
 
 
+def _get_solver_export_board_base(querier: ActionLineQuery) -> str:
+    actual_board = getattr(querier, "actual_board", "") or ""
+    if actual_board.strip():
+        return actual_board.strip()
+    return (querier.board or "").strip()
+
+
 def _match_action(user_input: str, available: List[str]) -> Optional[str]:
     """将用户输入匹配到可用动作（支持连续 bet/raise 映射到最近离散选项）"""
     # 优先使用连续→离散映射（真实场景：任意金额映射到最接近的选项）
@@ -228,7 +235,7 @@ def _export_turn_config_at_flop_end(
     remaining_ip = querier.effective_stack - ip_added
     eff_stack = min(remaining_oop, remaining_ip)
 
-    board_base = (querier.board or "").strip()
+    board_base = _get_solver_export_board_base(querier)
     board_list = [c.strip() for c in board_base.split(",") if c.strip()]
     new_board = ",".join(board_list + [turn_card]) if board_list else turn_card
 
@@ -317,7 +324,7 @@ def _export_river_config_at_turn_end(
     remaining_ip = querier.effective_stack - ip_added
     eff_stack = min(remaining_oop, remaining_ip)
 
-    board_base = (querier.board or "").strip()
+    board_base = _get_solver_export_board_base(querier)
     board_list = [c.strip() for c in board_base.split(",") if c.strip()]
     new_board = ",".join(board_list + [river_card]) if board_list else river_card
 
@@ -379,7 +386,7 @@ def _export_turn_config_at_flop_end(
     remaining_ip = querier.effective_stack - ip_added
     eff_stack = min(remaining_oop, remaining_ip)
 
-    board_base = (querier.board or "").strip()
+    board_base = _get_solver_export_board_base(querier)
     board_list = [c.strip() for c in board_base.split(",") if c.strip()]
     new_board = ",".join(board_list + [turn_card]) if board_list else turn_card
 
@@ -445,7 +452,7 @@ def _export_river_config_at_turn_end(
     remaining_ip = querier.effective_stack - ip_added
     eff_stack = min(remaining_oop, remaining_ip)
 
-    board_base = (querier.board or "").strip()
+    board_base = _get_solver_export_board_base(querier)
     board_list = [c.strip() for c in board_base.split(",") if c.strip()]
     new_board = ",".join(board_list + [river_card]) if board_list else river_card
 

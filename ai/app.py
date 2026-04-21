@@ -15,6 +15,19 @@ gto_dir = current_dir / "gto"
 if gto_dir.exists() and str(gto_dir) not in sys.path:
     sys.path.insert(0, str(gto_dir))
 
+from flop_isomorphism import (
+    FlopIsomorphismMapping,
+    ensure_unique_cards,
+    hand_conflicts_with_board,
+    map_action_path_deal_cards,
+    map_card_actual_to_canonical,
+    map_hand_actual_to_canonical,
+    map_hand_canonical_to_actual,
+    map_range_dict_keys,
+    normalize_board_cards,
+    solve_flop_isomorphism,
+)
+
 app = Flask(__name__)
 CORS(app)
 
@@ -75,6 +88,72 @@ def _print_request_summary(request_type: str, actual_path: str, query_path: str,
     print("=" * 60)
 
 
+def _format_cards_inline(cards: list[str] | tuple[str, ...]) -> str:
+    return ",".join(cards)
+
+
+def _build_range_remap_samples(
+    canonical_range: dict[str, float],
+    mapping: FlopIsomorphismMapping,
+    *,
+    limit: int = 5,
+) -> list[str]:
+    samples: list[str] = []
+    for canonical_hand in canonical_range.keys():
+        actual_hand = map_hand_canonical_to_actual(canonical_hand, mapping)
+        if actual_hand != canonical_hand:
+            samples.append(f"{canonical_hand}->{actual_hand}")
+        if len(samples) >= limit:
+            break
+    return samples
+
+
+def _log_flop_isomorphism_context(
+    *,
+    actual_flop_cards: list[str],
+    mapping: FlopIsomorphismMapping,
+    actual_ai_hand: str,
+    canonical_ai_hand: str,
+    action_path: list[str],
+    ip_range: dict[str, float],
+    oop_range: dict[str, float],
+) -> None:
+    canonical_flop_cards = list(mapping.canonical_ordered_flop_cards)
+    canonical_action_path = map_action_path_deal_cards(
+        action_path,
+        mapping,
+        direction="actual_to_canonical",
+    )
+    mapped_deals = [
+        f"{actual_step}->{canonical_step}"
+        for actual_step, canonical_step in zip(
+            action_path,
+            canonical_action_path,
+        )
+        if actual_step != canonical_step
+    ]
+
+    print("\n" + "-" * 60)
+    print("[Flop ISO] Request mapping")
+    print(f"[Flop ISO] Actual flop:     {_format_cards_inline(actual_flop_cards)}")
+    print(f"[Flop ISO] Canonical flop:  {_format_cards_inline(canonical_flop_cards)}")
+    print(f"[Flop ISO] Canonical file:  {mapping.canonical_flop}")
+    print(f"[Flop ISO] Suit map A->C:   {mapping.actual_to_canonical_suits}")
+    print(f"[Flop ISO] Suit map C->A:   {mapping.canonical_to_actual_suits}")
+    if actual_ai_hand:
+        print(f"[Flop ISO] Hand A->C:      {actual_ai_hand} -> {canonical_ai_hand}")
+    if mapped_deals:
+        print(f"[Flop ISO] Deal map A->C:  {', '.join(mapped_deals[:6])}")
+
+    ip_samples = _build_range_remap_samples(ip_range, mapping)
+    oop_samples = _build_range_remap_samples(oop_range, mapping)
+    if ip_samples:
+        print(f"[Flop ISO] IP range C->A:  {', '.join(ip_samples)}")
+    if oop_samples:
+        print(f"[Flop ISO] OOP range C->A: {', '.join(oop_samples)}")
+    print("-" * 60)
+
+
 def _infer_flop_board_from_path(data_path: Path) -> str:
     """Infer the flop board from a JSON/Parquet file name if possible."""
     stem = data_path.stem
@@ -127,12 +206,61 @@ def _resolve_existing_dataset_file(flop_cards: list[str]) -> tuple[Path | None, 
     return None, requested_board
 
 
-def _resolve_solver_data_path(board_str: str, dataset_source: str | None) -> tuple[Path, str, list[str]]:
-    flop_cards = [card.strip() for card in board_str.split(",")[:3] if card.strip()]
-    data_path, flop_board = _resolve_existing_dataset_file(flop_cards)
+def _map_range_dict_to_actual(
+    range_dict: dict[str, float],
+    mapping: FlopIsomorphismMapping | None,
+    *,
+    uses_isomorphic_flop_tree: bool,
+) -> dict[str, float]:
+    if not range_dict:
+        return {}
+    if not uses_isomorphic_flop_tree or mapping is None:
+        return dict(range_dict)
+    return map_range_dict_keys(
+        dict(range_dict),
+        mapping,
+        direction="canonical_to_actual",
+    )
+
+
+def _sync_current_ranges_with_node(
+    current_node: dict | None,
+    current_ip_range: dict[str, float],
+    current_oop_range: dict[str, float],
+    querier,
+) -> tuple[dict[str, float], dict[str, float], dict[str, float], dict[str, float]]:
+    if current_node and isinstance(current_node.get("ranges", {}), dict):
+        ranges_info = current_node.get("ranges", {})
+        if ranges_info.get("ip_range"):
+            current_ip_range = dict(ranges_info["ip_range"])
+        if ranges_info.get("oop_range"):
+            current_oop_range = dict(ranges_info["oop_range"])
+
+    current_ip_range_actual = _map_range_dict_to_actual(
+        current_ip_range,
+        getattr(querier, "flop_isomorphism", None),
+        uses_isomorphic_flop_tree=getattr(querier, "uses_isomorphic_flop_tree", False),
+    )
+    current_oop_range_actual = _map_range_dict_to_actual(
+        current_oop_range,
+        getattr(querier, "flop_isomorphism", None),
+        uses_isomorphic_flop_tree=getattr(querier, "uses_isomorphic_flop_tree", False),
+    )
+    return current_ip_range, current_oop_range, current_ip_range_actual, current_oop_range_actual
+
+
+def _resolve_solver_data_path(
+    board_str: str,
+    dataset_source: str | None,
+) -> tuple[Path, str, list[str], FlopIsomorphismMapping]:
+    board_cards = [card.strip() for card in board_str.split(",") if card.strip()]
+    flop_cards = list(normalize_board_cards(board_cards[:3]))
+    mapping = solve_flop_isomorphism(flop_cards)
+    canonical_flop_cards = list(mapping.canonical_ordered_flop_cards)
+    data_path, flop_board = _resolve_existing_dataset_file(canonical_flop_cards)
 
     if data_path and data_path.exists():
-        return data_path, flop_board, flop_cards
+        return data_path, flop_board, flop_cards, mapping
 
     cache_dir_path = _get_dataset_cache_dir()
 
@@ -140,7 +268,7 @@ def _resolve_solver_data_path(board_str: str, dataset_source: str | None) -> tup
         from download_from_hf import download_board_from_hf
 
         downloaded = download_board_from_hf(
-            flop_board,
+            mapping.canonical_flop,
             cache_dir=str(cache_dir_path),
             preferred_source=dataset_source,
         )
@@ -152,9 +280,11 @@ def _resolve_solver_data_path(board_str: str, dataset_source: str | None) -> tup
 
     if downloaded and downloaded.exists():
         print(f"[Dataset] Downloaded missing flop cache: {downloaded.name}")
-        return downloaded, flop_board, flop_cards
+        return downloaded, mapping.canonical_flop, flop_cards, mapping
 
-    raise FileNotFoundError(f"Solver data is missing and could not be downloaded: {flop_board}")
+    raise FileNotFoundError(
+        f"Solver data is missing and could not be downloaded: {mapping.canonical_flop}"
+    )
 
 
 def _resolve_config_path(data_file: str, flop_board: str) -> str | None:
@@ -204,6 +334,8 @@ def _refresh_querier_from_solver_output(querier, result_path: Path, config_path:
 
     cfg = parse_config(str(config_path))
     querier.board = cfg.get("board", "")
+    querier.actual_board = querier.board
+    querier.uses_isomorphic_flop_tree = False
     with open(str(config_path), "r", encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
@@ -275,9 +407,30 @@ def _prepare_query_context(data: dict) -> dict:
         raise ApiRouteError(400, {"error": "Missing action path"})
 
     try:
-        data_path, flop_board, flop_cards = _resolve_solver_data_path(board_str, dataset_source)
+        board_cards = list(normalize_board_cards(board_str.split(",")))
+    except ValueError as exc:
+        raise ApiRouteError(400, {"error": str(exc)}) from exc
+
+    if len(board_cards) < 3:
+        raise ApiRouteError(400, {"error": "Missing flop cards in the board"})
+
+    try:
+        data_path, flop_board, flop_cards, flop_iso_mapping = _resolve_solver_data_path(
+            board_str,
+            dataset_source,
+        )
     except FileNotFoundError as exc:
         raise ApiRouteError(404, {"error": str(exc)}) from exc
+    except ValueError as exc:
+        raise ApiRouteError(400, {"error": str(exc)}) from exc
+
+    if ai_hand:
+        try:
+            ai_hand = ai_hand.strip()
+            if hand_conflicts_with_board(ai_hand, board_cards):
+                raise ApiRouteError(400, {"error": "AI hand conflicts with the board"})
+        except ValueError as exc:
+            raise ApiRouteError(400, {"error": str(exc)}) from exc
 
     data_file = str(data_path)
 
@@ -297,6 +450,16 @@ def _prepare_query_context(data: dict) -> dict:
         raise ApiRouteError(404, {"error": "No config found for board"})
 
     _, ip_rng, oop_rng, init_pot, eff_stack = _get_parsed_config_data(config_path)
+    canonical_ai_hand = map_hand_actual_to_canonical(ai_hand, flop_iso_mapping) if ai_hand else ""
+    _log_flop_isomorphism_context(
+        actual_flop_cards=flop_cards,
+        mapping=flop_iso_mapping,
+        actual_ai_hand=ai_hand,
+        canonical_ai_hand=canonical_ai_hand,
+        action_path=action_path,
+        ip_range=ip_rng,
+        oop_range=oop_rng,
+    )
     with _data_load_lock:
         cached_data = _get_loaded_game_data(data_file)
 
@@ -310,25 +473,42 @@ def _prepare_query_context(data: dict) -> dict:
     }
     querier.initial_pot = init_pot
     querier.effective_stack = eff_stack
-    inferred_board = _infer_flop_board_from_path(Path(data_file))
-    querier.board = inferred_board if inferred_board else ",".join(flop_cards)
+    querier.board = ",".join(flop_iso_mapping.canonical_ordered_flop_cards)
+    querier.actual_board = ",".join(flop_cards)
+    querier.flop_isomorphism = flop_iso_mapping
+    querier.uses_isomorphic_flop_tree = True
 
     current_node = querier.data
     board_count = 3
     effective_call_amount = 0.0
     current_ip_range = querier.initial_ranges["ip"].copy()
     current_oop_range = querier.initial_ranges["oop"].copy()
+    current_ip_range_actual = _map_range_dict_to_actual(
+        current_ip_range,
+        flop_iso_mapping,
+        uses_isomorphic_flop_tree=True,
+    )
+    current_oop_range_actual = _map_range_dict_to_actual(
+        current_oop_range,
+        flop_iso_mapping,
+        uses_isomorphic_flop_tree=True,
+    )
     step_path_so_far: list[str] = []
     resolved_actions: list[tuple[str, str]] = []
 
     for step in action_path:
         node_type = current_node.get("node_type", "")
-        ranges_info = current_node.get("ranges", {})
-        if isinstance(ranges_info, dict):
-            if ranges_info.get("ip_range"):
-                current_ip_range = ranges_info["ip_range"]
-            if ranges_info.get("oop_range"):
-                current_oop_range = ranges_info["oop_range"]
+        (
+            current_ip_range,
+            current_oop_range,
+            current_ip_range_actual,
+            current_oop_range_actual,
+        ) = _sync_current_ranges_with_node(
+            current_node,
+            current_ip_range,
+            current_oop_range,
+            querier,
+        )
 
         if node_type == "action_node":
             actions = current_node.get("actions", [])
@@ -385,13 +565,19 @@ def _prepare_query_context(data: dict) -> dict:
                 print(f"[API Error] Expected a DEAL action at chance node, got: {step}")
                 raise ApiRouteError(400, {"error": f"Expected DEAL action at chance node, got: {step}"})
 
-            card = step.split(":", 1)[1].strip()
+            actual_card = step.split(":", 1)[1].strip()
+            card = actual_card
+            if getattr(querier, "uses_isomorphic_flop_tree", False):
+                try:
+                    card = map_card_actual_to_canonical(actual_card, flop_iso_mapping)
+                except ValueError as exc:
+                    raise ApiRouteError(400, {"error": str(exc)}) from exc
             dealcards = current_node.get("dealcards", {})
             if card not in dealcards:
                 print(f"[API Error] Deal card '{card}' was not found. Available: {list(dealcards.keys())[:20]}")
-                raise ApiRouteError(400, {"error": f"Invalid deal card: {card}"})
+                raise ApiRouteError(400, {"error": f"Invalid deal card: {actual_card}"})
 
-            resolved_actions.append((step, step))
+            resolved_actions.append((step, f"DEAL:{card}"))
             next_node = dealcards[card]
 
             is_flop_to_turn = (
@@ -408,9 +594,17 @@ def _prepare_query_context(data: dict) -> dict:
                     querier,
                     path_flop,
                     next_node,
-                    card,
-                    turn_ranges.get("oop_range") or current_oop_range,
-                    turn_ranges.get("ip_range") or current_ip_range,
+                    actual_card,
+                    _map_range_dict_to_actual(
+                        turn_ranges.get("oop_range") or current_oop_range,
+                        flop_iso_mapping,
+                        uses_isomorphic_flop_tree=getattr(querier, "uses_isomorphic_flop_tree", False),
+                    ),
+                    _map_range_dict_to_actual(
+                        turn_ranges.get("ip_range") or current_ip_range,
+                        flop_iso_mapping,
+                        uses_isomorphic_flop_tree=getattr(querier, "uses_isomorphic_flop_tree", False),
+                    ),
                 )
                 if export_result:
                     turn_config_path, turn_dump_name = export_result
@@ -451,9 +645,9 @@ def _prepare_query_context(data: dict) -> dict:
                     querier,
                     step_path_so_far,
                     river_node,
-                    card,
-                    river_ranges.get("oop_range") or current_oop_range,
-                    river_ranges.get("ip_range") or current_ip_range,
+                    actual_card,
+                    river_ranges.get("oop_range") or current_oop_range_actual,
+                    river_ranges.get("ip_range") or current_ip_range_actual,
                 )
                 if export_result:
                     river_config_path, river_dump_name = export_result
@@ -482,11 +676,34 @@ def _prepare_query_context(data: dict) -> dict:
                         ) from exc
 
             current_node = next_node
+            (
+                current_ip_range,
+                current_oop_range,
+                current_ip_range_actual,
+                current_oop_range_actual,
+            ) = _sync_current_ranges_with_node(
+                current_node,
+                current_ip_range,
+                current_oop_range,
+                querier,
+            )
             effective_call_amount = 0.0
 
         step_path_so_far.append(step)
         if not current_node:
             break
+
+    (
+        current_ip_range,
+        current_oop_range,
+        current_ip_range_actual,
+        current_oop_range_actual,
+    ) = _sync_current_ranges_with_node(
+        current_node,
+        current_ip_range,
+        current_oop_range,
+        querier,
+    )
 
     q_path_state, q_init_pot = _get_path_and_initial_for_pot(
         step_path_so_far,
@@ -503,10 +720,15 @@ def _prepare_query_context(data: dict) -> dict:
 
     return {
         "board_str": board_str,
-        "board_cards": [card.strip() for card in board_str.split(",") if card.strip()],
+        "board_cards": board_cards,
+        "actual_flop_board": ",".join(flop_cards),
+        "canonical_flop_board": ",".join(flop_iso_mapping.canonical_ordered_flop_cards),
         "action_path": action_path,
         "ai_hand": ai_hand,
+        "actual_ai_hand": ai_hand,
+        "canonical_ai_hand": canonical_ai_hand if ai_hand else ai_hand,
         "use_mdf": data.get("use_mdf", False),
+        "flop_iso_mapping": flop_iso_mapping,
         "querier": querier,
         "current_node": current_node,
         "node_type": node_type,
@@ -515,6 +737,9 @@ def _prepare_query_context(data: dict) -> dict:
         "effective_call_amount": effective_call_amount,
         "current_ip_range": current_ip_range,
         "current_oop_range": current_oop_range,
+        "current_ip_range_actual": current_ip_range_actual,
+        "current_oop_range_actual": current_oop_range_actual,
+        "current_tree_uses_isomorphic_flop": getattr(querier, "uses_isomorphic_flop_tree", False),
         "step_path_so_far": step_path_so_far,
         "resolved_actions": resolved_actions,
         "actual_path_str": actual_path_str,
@@ -537,6 +762,13 @@ def _resolve_strategy_context(context: dict, ai_hand: str) -> dict:
     actions = current_node.get("actions", [])
     strategy_dict = current_node.get("strategy", {}).get("strategy", {})
     evs_dict = current_node.get("evs", {}).get("evs", {})
+    uses_isomorphic_flop = bool(context.get("current_tree_uses_isomorphic_flop"))
+    flop_iso_mapping = context.get("flop_iso_mapping")
+    lookup_hand = (
+        context.get("canonical_ai_hand") if uses_isomorphic_flop else ai_hand
+    ) or ai_hand
+    if uses_isomorphic_flop and ai_hand and lookup_hand != ai_hand:
+        print(f"[Flop ISO] Strategy lookup A->C: {ai_hand} -> {lookup_hand}")
     acting_player = current_node.get("player")
     acting_range = (
         context["current_ip_range"]
@@ -558,8 +790,8 @@ def _resolve_strategy_context(context: dict, ai_hand: str) -> dict:
             }
         }
 
-    probs = _get_probs_for_hand(ai_hand, strategy_dict, actions)
-    hand_ev_dict = _get_ev_for_hand(ai_hand, evs_dict, actions) or {}
+    probs = _get_probs_for_hand(lookup_hand, strategy_dict, actions)
+    hand_ev_dict = _get_ev_for_hand(lookup_hand, evs_dict, actions) or {}
 
     if not probs or len(actions) != len(probs):
         proxy_hand = _pick_hand_from_strategy(strategy_dict, acting_range)
@@ -567,12 +799,18 @@ def _resolve_strategy_context(context: dict, ai_hand: str) -> dict:
             proxy_hand = random.choice(list(strategy_dict.keys()))
         probs = _get_probs_for_hand(proxy_hand, strategy_dict, actions)
         hand_ev_dict = _get_ev_for_hand(proxy_hand, evs_dict, actions) or {}
-        strategy_hand_used = proxy_hand
+        strategy_hand_used = (
+            map_hand_canonical_to_actual(proxy_hand, flop_iso_mapping)
+            if uses_isomorphic_flop and flop_iso_mapping is not None
+            else proxy_hand
+        )
+        if uses_isomorphic_flop and flop_iso_mapping is not None:
+            print(f"[Flop ISO] Proxy hand C->A: {proxy_hand} -> {strategy_hand_used}")
         decision_source = "gto_proxy_hand"
         acting_side = "IP" if acting_player == 1 else "OOP" if acting_player == 0 else str(acting_player)
         decision_detail = (
             f"Exact hand strategy was unavailable, so a proxy hand was selected "
-            f"from the acting player's {acting_side} range: {proxy_hand}."
+            f"from the acting player's {acting_side} range: {strategy_hand_used}."
         )
 
     if not probs or len(actions) != len(probs):

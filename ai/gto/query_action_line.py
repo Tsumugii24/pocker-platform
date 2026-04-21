@@ -148,6 +148,9 @@ class ActionLineQuery:
         self.data = None
         self.initial_ranges = {'ip': {}, 'oop': {}}
         self.board = ""
+        self.actual_board = ""
+        self.flop_isomorphism = None
+        self.uses_isomorphic_flop_tree = False
         self.initial_pot = 5.0
         self.effective_stack = 100.0
 
@@ -155,6 +158,7 @@ class ActionLineQuery:
             try:
                 config_data = parse_config(str(self.config_path))
                 self.board = config_data.get('board', '')
+                self.actual_board = self.board
                 board_list = [c.strip() for c in self.board.split(',') if c.strip()]
                 
                 self.initial_ranges = {
