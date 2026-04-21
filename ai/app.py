@@ -937,19 +937,27 @@ def river_exploit_stream():
         villain_position = str(data.get("villainPosition") or data.get("villain_position") or "UTG")
         actor_position = str(data.get("actorPosition") or data.get("actor_position") or villain_position)
         opponent_position = str(data.get("opponentPosition") or data.get("opponent_position") or hero_position)
+        prompt_language_raw = data.get("promptLanguage")
+        if prompt_language_raw is None:
+            prompt_language_raw = data.get("prompt_language")
         reasoning_override_raw = data.get("enableReasoning")
         if reasoning_override_raw is None:
             reasoning_override_raw = data.get("enable_reasoning")
         reasoning_override = None if reasoning_override_raw is None else bool(reasoning_override_raw)
 
         from river_llm_exploit import (
-            SYSTEM_PROMPT,
             build_user_prompt,
             extract_json_block,
+            get_system_prompt,
             is_reasoning_enabled,
+            normalize_prompt_language,
             normalize_frequency_map,
             stream_reasoning_and_output,
         )
+        prompt_language = normalize_prompt_language(
+            None if prompt_language_raw is None else str(prompt_language_raw)
+        )
+        system_prompt = get_system_prompt(prompt_language)
 
         user_prompt = build_user_prompt(
             board_cards=context["board_cards"],
@@ -964,6 +972,7 @@ def river_exploit_stream():
             strategy_hand_used=strategy_context.get("strategy_hand_used", ai_hand),
             baseline_source=strategy_context.get("decision_source", "fallback_default"),
             baseline_detail=strategy_context.get("decision_detail", "No baseline was available."),
+            language=prompt_language,
         )
         reasoning_supported = is_reasoning_enabled(reasoning_override)
 
@@ -976,7 +985,7 @@ def river_exploit_stream():
             )
             yield _stream_json_line(
                 "system_markdown",
-                content=SYSTEM_PROMPT.strip(),
+                content=system_prompt.strip(),
             )
             yield _stream_json_line(
                 "user_markdown",
@@ -1000,7 +1009,7 @@ def river_exploit_stream():
 
             try:
                 llm_stream, model = stream_reasoning_and_output(
-                    system_prompt=SYSTEM_PROMPT,
+                    system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     reasoning_enabled=reasoning_override,
                 )

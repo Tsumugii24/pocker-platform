@@ -1,4 +1,9 @@
-import { DEFAULT_TEST_CONFIG, type Position, type TestConfig } from '@/types/poker';
+import {
+  DEFAULT_TEST_CONFIG,
+  type Position,
+  type RiverExploitPromptLanguage,
+  type TestConfig,
+} from '@/types/poker';
 
 interface EffectivePositions {
   heroPosition: Position;
@@ -18,9 +23,12 @@ export function normalizeTestConfig(config?: Partial<TestConfig>): TestConfig {
     ...DEFAULT_TEST_CONFIG,
     ...(config ?? {}),
   };
+  const promptLanguage: RiverExploitPromptLanguage =
+    merged.riverExploitPromptLanguage === 'zh' ? 'zh' : 'en';
 
   return {
     ...merged,
+    riverExploitPromptLanguage: promptLanguage,
     ...getEffectivePositions(merged),
   };
 }

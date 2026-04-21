@@ -429,6 +429,34 @@ export function SettingsDialog({
                 </div>
               </div>
 
+              <div className="ml-5 rounded-lg border border-[#222222] bg-black/20 px-4 py-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Label className="text-sm font-medium">River Prompt Language</Label>
+                      <Badge variant="outline" className="border-[#ff8c00]/40 text-[#ffb347]">
+                        Test Feature
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      Choose the language used for the river exploit system prompt and user prompt. Default: English.
+                    </p>
+                  </div>
+                  <select
+                    value={tempTestConfig.riverExploitPromptLanguage || 'en'}
+                    disabled={!isTestFeatureEnabled || !(tempTestConfig.enableRiverLLMExploit ?? false)}
+                    onChange={(e) => setTempTestConfig(prev => ({
+                      ...prev,
+                      riverExploitPromptLanguage: e.target.value === 'zh' ? 'zh' : 'en',
+                    }))}
+                    className="min-w-[120px] rounded border border-[#333333] bg-[#1a1a1a] px-3 py-2 text-sm text-gray-300 focus:outline-none focus:border-[#00d084] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <option value="en">English</option>
+                    <option value="zh">中文</option>
+                  </select>
+                </div>
+              </div>
+
               <div className="border-t border-[#333333] pt-4 mt-4">
                 <Label className="text-sm font-medium block mb-3">默认下载源设定</Label>
                 <div className="flex flex-col gap-2">

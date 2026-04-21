@@ -10,6 +10,7 @@ export type Position = 'UTG' | 'HJ' | 'CO' | 'BTN' | 'SB' | 'BB';
 
 export type ActionType = 'fold' | 'check' | 'call' | 'bet' | 'raise' | 'allin';
 export type ActionActor = 'hero' | 'ai' | 'other';
+export type RiverExploitPromptLanguage = 'en' | 'zh';
 
 export interface Action {
   position: Position;
@@ -52,6 +53,7 @@ export interface TestConfig {
   showAIDecisionNotes?: boolean;
   enableRiverLLMExploit?: boolean;
   enableRiverLLMReasoning?: boolean;
+  riverExploitPromptLanguage?: RiverExploitPromptLanguage;
 }
 
 export const DEFAULT_TEST_CONFIG: TestConfig = {
@@ -70,6 +72,7 @@ export const DEFAULT_TEST_CONFIG: TestConfig = {
   showAIDecisionNotes: false,
   enableRiverLLMExploit: false,
   enableRiverLLMReasoning: false,
+  riverExploitPromptLanguage: 'en',
 };
 
 export interface Player {

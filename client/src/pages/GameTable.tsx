@@ -1177,6 +1177,7 @@ export default function GameTable() {
           actorPosition: villainInfo.position,
           opponentPosition: heroInfo.position,
           enableReasoning: enableRiverLLMReasoningRef.current,
+          promptLanguage: latestTestConfigRef.current.riverExploitPromptLanguage ?? 'en',
         }),
       });
 
