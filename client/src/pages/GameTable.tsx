@@ -1327,7 +1327,7 @@ export default function GameTable() {
           safeUpdate(trace => ({
             ...trace,
             status: 'complete',
-            parsedStrategy: event.strategy ?? trace.parsedStrategy,
+            parsedStrategy: trace.parsedStrategy ?? event.strategy ?? null,
             action: event.action ?? trace.action,
             decisionSource: event.decision_source ?? trace.decisionSource,
             decisionDetail: event.decision_detail ?? trace.decisionDetail,

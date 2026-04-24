@@ -1044,7 +1044,10 @@ def _sample_baseline_decision(context: dict, ai_hand: str, strategy_context: dic
     }
 
 
-def _map_llm_frequencies_to_actions(raw_map: dict[str, float], available_actions: list[str]) -> tuple[dict[str, float], dict[str, float]]:
+def _map_llm_frequencies_to_actions(
+    raw_map: dict[str, float],
+    available_actions: list[str],
+) -> tuple[dict[str, float], dict[str, float], dict[str, float], float]:
     from interactive_strategy import _match_action
 
     matched: dict[str, float] = {}
@@ -1060,16 +1063,23 @@ def _map_llm_frequencies_to_actions(raw_map: dict[str, float], available_actions
     if not matched:
         raise ValueError("The LLM output did not contain any action that matched the available solver actions.")
 
-    total = sum(matched.values())
+    literal_percentages = {
+        action: float(frequency)
+        for action, frequency in matched.items()
+        if float(frequency) > 0
+    }
+    total = sum(literal_percentages.values())
     if total <= 0:
         raise ValueError("The LLM output produced non-positive action frequencies.")
 
-    normalized = {
-        action: (frequency / total) * 100.0
-        for action, frequency in matched.items()
-        if frequency > 0
-    }
-    return normalized, ignored
+    if abs(total - 100.0) <= 1.0:
+        normalized_for_sampling = dict(literal_percentages)
+    else:
+        normalized_for_sampling = {
+            action: (frequency / total) * 100.0
+            for action, frequency in literal_percentages.items()
+        }
+    return literal_percentages, normalized_for_sampling, ignored, total
 
 
 def _sample_llm_decision(context: dict, ai_hand: str, strategy_context: dict, llm_strategy: dict[str, float], model: str) -> dict:
@@ -1310,7 +1320,7 @@ def river_exploit_stream():
                 final_text = "".join(final_parts)
                 parsed_output = extract_json_block(final_text)
                 normalized_output = normalize_frequency_map(parsed_output)
-                matched_strategy, ignored_actions = _map_llm_frequencies_to_actions(
+                literal_strategy, sampling_strategy, ignored_actions, literal_total = _map_llm_frequencies_to_actions(
                     normalized_output,
                     strategy_context["actions"],
                 )
@@ -1323,8 +1333,23 @@ def river_exploit_stream():
                         ),
                     )
 
-                yield _stream_json_line("parsed_output", strategy=matched_strategy)
-                decision_payload = _sample_llm_decision(context, ai_hand, strategy_context, matched_strategy, model)
+                if abs(literal_total - 100.0) > 1.0:
+                    yield _stream_json_line(
+                        "warning",
+                        message=(
+                            "The parsed LLM frequencies were interpreted on a 0-100 percentage scale, "
+                            f"but they summed to {literal_total:.1f}. The backend renormalized them for decision sampling."
+                        ),
+                    )
+
+                yield _stream_json_line("parsed_output", strategy=literal_strategy)
+                decision_payload = _sample_llm_decision(
+                    context,
+                    ai_hand,
+                    strategy_context,
+                    sampling_strategy,
+                    model,
+                )
                 yield _stream_json_line("decision", **decision_payload)
                 yield _stream_json_line("complete", status="complete")
             except Exception as exc:
