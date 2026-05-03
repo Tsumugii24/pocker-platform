@@ -105,9 +105,17 @@ export function SettingsDialog({
           : null
       );
       if (authTarget) {
-        const authWindow = window.open(authTarget, '_blank', 'noopener,noreferrer');
+        const authWindow = window.open(authTarget, 'chatgpt-oauth-login');
         if (!authWindow) {
-          window.location.assign(authTarget);
+          setChatGptOauthStatus(prev => ({
+            ...(prev ?? status),
+            authenticated: false,
+            proxyRunning: false,
+            loginRunning: false,
+            proxyProcessRunning: false,
+            authUrl: authTarget,
+            error: 'Popup was blocked. Open the authorization link shown below.',
+          }));
         }
       }
       if (status.authenticated) {
@@ -604,7 +612,7 @@ export function SettingsDialog({
                       <div>
                         <div className="font-medium text-[#8bc2ff]">ChatGPT OAuth</div>
                         <div className="mt-1 text-[11px] text-gray-500">
-                          Login opens the ChatGPT authorization page. On remote servers, paste the final redirect URL or code below.
+                          Login opens one ChatGPT authorization tab. On remote servers, copy the final localhost callback URL and paste it below.
                         </div>
                       </div>
                       <div className="flex gap-2">
@@ -654,6 +662,19 @@ export function SettingsDialog({
                     </div>
                     {chatGptOauthStatus?.authorizationPending && !chatGptOauthStatus?.authenticated && (
                       <div className="mt-3 rounded border border-[#222222] bg-black/20 p-2">
+                        {chatGptOauthStatus.authUrl && (
+                          <a
+                            href={chatGptOauthStatus.authUrl}
+                            target="chatgpt-oauth-login"
+                            rel="noreferrer"
+                            className="mb-2 block break-all text-[11px] text-[#8bc2ff] hover:underline"
+                          >
+                            Open authorization page
+                          </a>
+                        )}
+                        <p className="mb-2 text-[11px] text-gray-500">
+                          If the auth tab ends on a localhost refused-connection page, copy that full URL from the address bar and paste it here.
+                        </p>
                         <Label className="text-[11px] text-gray-400">
                           Redirect URL or authorization code
                         </Label>
