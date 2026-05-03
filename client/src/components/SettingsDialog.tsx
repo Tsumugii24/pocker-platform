@@ -29,6 +29,9 @@ interface ChatGptOauthStatus {
   authUrl?: string | null;
   deviceCode?: string | null;
   loginMode?: string | null;
+  authorizationPending?: boolean;
+  callbackReceived?: boolean;
+  callbackError?: string | null;
   proxyBaseUrl?: string;
   models?: string[];
   loginOutputTail?: string[];
@@ -69,6 +72,7 @@ export function SettingsDialog({
   const [mirrorTest, setMirrorTest] = useState<NetworkTestResult>({ status: 'idle' });
   const [chatGptOauthStatus, setChatGptOauthStatus] = useState<ChatGptOauthStatus | null>(null);
   const [isChatGptOauthBusy, setIsChatGptOauthBusy] = useState(false);
+  const [chatGptAuthorizationInput, setChatGptAuthorizationInput] = useState('');
 
   const refreshChatGptOauthStatus = useCallback(async (autoStartProxy = false) => {
     const statusResponse = await fetch('/api/chatgpt-oauth/status');
@@ -117,6 +121,37 @@ export function SettingsDialog({
         proxyProcessRunning: false,
         ...(prev ?? {}),
         error: err instanceof Error ? err.message : 'Failed to start ChatGPT OAuth login.',
+      }));
+    } finally {
+      setIsChatGptOauthBusy(false);
+    }
+  };
+
+  const handleChatGptOauthComplete = async () => {
+    setIsChatGptOauthBusy(true);
+    try {
+      const response = await fetch('/api/chatgpt-oauth/login/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ authorizationInput: chatGptAuthorizationInput }),
+      });
+      const status = await response.json() as ChatGptOauthStatus;
+      setChatGptOauthStatus(status);
+      if (!response.ok) {
+        throw new Error(status.error || 'Failed to complete ChatGPT OAuth login.');
+      }
+      setChatGptAuthorizationInput('');
+      if (status.authenticated) {
+        await refreshChatGptOauthStatus(true);
+      }
+    } catch (err) {
+      setChatGptOauthStatus(prev => ({
+        authenticated: false,
+        proxyRunning: false,
+        loginRunning: false,
+        proxyProcessRunning: false,
+        ...(prev ?? {}),
+        error: err instanceof Error ? err.message : 'Failed to complete ChatGPT OAuth login.',
       }));
     } finally {
       setIsChatGptOauthBusy(false);
@@ -569,7 +604,7 @@ export function SettingsDialog({
                       <div>
                         <div className="font-medium text-[#8bc2ff]">ChatGPT OAuth</div>
                         <div className="mt-1 text-[11px] text-gray-500">
-                          Login opens the ChatGPT device verification page. The local proxy starts automatically after login.
+                          Login opens the ChatGPT authorization page. On remote servers, paste the final redirect URL or code below.
                         </div>
                       </div>
                       <div className="flex gap-2">
@@ -606,7 +641,41 @@ export function SettingsDialog({
                           Waiting for verification
                         </span>
                       )}
+                      {chatGptOauthStatus?.authorizationPending && (
+                        <span className="rounded-full border border-[#4ea1ff]/40 px-2 py-1 text-[#8bc2ff]">
+                          Authorization pending
+                        </span>
+                      )}
+                      {chatGptOauthStatus?.callbackReceived && (
+                        <span className="rounded-full border border-[#00d084]/40 px-2 py-1 text-[#7af0b5]">
+                          Callback received
+                        </span>
+                      )}
                     </div>
+                    {chatGptOauthStatus?.authorizationPending && !chatGptOauthStatus?.authenticated && (
+                      <div className="mt-3 rounded border border-[#222222] bg-black/20 p-2">
+                        <Label className="text-[11px] text-gray-400">
+                          Redirect URL or authorization code
+                        </Label>
+                        <div className="mt-2 flex gap-2">
+                          <Input
+                            value={chatGptAuthorizationInput}
+                            onChange={(e) => setChatGptAuthorizationInput(e.target.value)}
+                            placeholder="Paste code or http://localhost:1455/auth/callback?code=..."
+                            className="h-8 flex-1 bg-[#111111] border-[#333333] text-xs text-white"
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={handleChatGptOauthComplete}
+                            disabled={isChatGptOauthBusy || !chatGptAuthorizationInput.trim()}
+                            className="bg-[#00d084] px-3 py-1 text-xs text-black hover:bg-[#00d084]/90 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Complete
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                     {chatGptOauthStatus?.proxyBaseUrl && (
                       <p className="mt-2 text-[11px] text-gray-500">
                         Proxy URL: {chatGptOauthStatus.proxyBaseUrl}
@@ -622,6 +691,11 @@ export function SettingsDialog({
                         {chatGptOauthStatus.loginOutputTail.join('\n')}
                       </pre>
                     ) : null}
+                    {chatGptOauthStatus?.callbackError && (
+                      <p className="mt-2 text-[11px] text-red-400">
+                        {chatGptOauthStatus.callbackError}
+                      </p>
+                    )}
                     {chatGptOauthStatus?.error && (
                       <p className="mt-2 text-[11px] text-red-400">
                         {chatGptOauthStatus.error}

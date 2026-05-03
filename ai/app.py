@@ -1,10 +1,17 @@
+import base64
+import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import time
 import traceback
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.request import Request, urlopen
 
 from flask import Flask, Response, jsonify, request, stream_with_context
 from flask_cors import CORS
@@ -75,14 +82,25 @@ solve_lock = threading.Lock()
 CHATGPT_OAUTH_MODELS = "gpt-5.5,gpt-5.4"
 CHATGPT_OAUTH_PROXY_PORT = 10531
 CHATGPT_OAUTH_PROXY_BASE_URL = f"http://127.0.0.1:{CHATGPT_OAUTH_PROXY_PORT}/v1"
-CHATGPT_OAUTH_AUTH_URL_RE = re.compile(r"https://\S+")
-CHATGPT_OAUTH_DEVICE_CODE_RE = re.compile(r"\b[A-Z0-9]{4}-[A-Z0-9]{4}\b|\b[A-Z0-9]{8}\b")
+CHATGPT_OAUTH_CALLBACK_HOST = os.getenv("CHATGPT_OAUTH_CALLBACK_HOST", "127.0.0.1")
+CHATGPT_OAUTH_CALLBACK_PORT = int(os.getenv("CHATGPT_OAUTH_CALLBACK_PORT", "1455"))
+CHATGPT_OAUTH_REDIRECT_URI = f"http://localhost:{CHATGPT_OAUTH_CALLBACK_PORT}/auth/callback"
+CHATGPT_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
+CHATGPT_OAUTH_AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize"
+CHATGPT_OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
+CHATGPT_OAUTH_SCOPE = "openid profile email offline_access"
+CHATGPT_OAUTH_JWT_CLAIM_PATH = "https://api.openai.com/auth"
 CHATGPT_OAUTH_LOCK = threading.Lock()
 CHATGPT_OAUTH_STATE: dict = {
     "login_process": None,
     "login_url": None,
     "login_code": None,
-    "login_mode": None,
+    "login_mode": "pkce",
+    "login_verifier": None,
+    "login_state": None,
+    "callback_code": None,
+    "callback_error": None,
+    "callback_server": None,
     "login_output": [],
     "proxy_process": None,
     "proxy_output": [],
@@ -112,15 +130,6 @@ def _watch_chatgpt_oauth_process(process: subprocess.Popen, output_key: str) -> 
             return
         for line in process.stdout:
             _append_process_output(output_key, line)
-            url_match = CHATGPT_OAUTH_AUTH_URL_RE.search(line)
-            code_match = CHATGPT_OAUTH_DEVICE_CODE_RE.search(line)
-            if url_match:
-                auth_url = url_match.group(0).rstrip(".,);]")
-                with CHATGPT_OAUTH_LOCK:
-                    CHATGPT_OAUTH_STATE["login_url"] = auth_url
-            if code_match:
-                with CHATGPT_OAUTH_LOCK:
-                    CHATGPT_OAUTH_STATE["login_code"] = code_match.group(0)
     finally:
         try:
             process.wait(timeout=1)
@@ -178,6 +187,242 @@ def _is_process_running(process: subprocess.Popen | None) -> bool:
     return process is not None and process.poll() is None
 
 
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def _generate_pkce() -> tuple[str, str]:
+    verifier = _b64url(secrets.token_bytes(32))
+    challenge = _b64url(hashlib.sha256(verifier.encode("ascii")).digest())
+    return verifier, challenge
+
+
+def _decode_jwt_payload(token: str) -> dict:
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return {}
+        payload = parts[1]
+        payload += "=" * (-len(payload) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload.encode("ascii")).decode("utf-8"))
+    except Exception:
+        return {}
+
+
+def _extract_chatgpt_account_id(access_token: str) -> str | None:
+    payload = _decode_jwt_payload(access_token)
+    auth_claim = payload.get(CHATGPT_OAUTH_JWT_CLAIM_PATH)
+    if not isinstance(auth_claim, dict):
+        return None
+    account_id = auth_claim.get("chatgpt_account_id")
+    return account_id if isinstance(account_id, str) and account_id else None
+
+
+def _parse_authorization_input(value: str) -> tuple[str | None, str | None]:
+    raw_value = (value or "").strip()
+    if not raw_value:
+        return None, None
+
+    try:
+        parsed = urlparse(raw_value)
+        if parsed.query:
+            params = parse_qs(parsed.query)
+            return params.get("code", [None])[0], params.get("state", [None])[0]
+    except Exception:
+        pass
+
+    if "#" in raw_value and "code=" not in raw_value:
+        code, state = raw_value.split("#", 1)
+        return code.strip() or None, state.strip() or None
+
+    if "code=" in raw_value:
+        params = parse_qs(raw_value)
+        return params.get("code", [None])[0], params.get("state", [None])[0]
+
+    return raw_value, None
+
+
+def _write_chatgpt_oauth_auth(tokens: dict) -> None:
+    access_token = tokens.get("access_token")
+    refresh_token = tokens.get("refresh_token")
+    id_token = tokens.get("id_token")
+    if not access_token or not refresh_token:
+        raise RuntimeError("Token response did not include access_token and refresh_token.")
+
+    account_id = _extract_chatgpt_account_id(access_token)
+    if not account_id:
+        raise RuntimeError("Could not extract ChatGPT account id from the access token.")
+
+    auth_path = _chatgpt_oauth_auth_paths()[0]
+    auth_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "auth_mode": "chatgpt",
+        "OPENAI_API_KEY": None,
+        "tokens": {
+            "id_token": id_token,
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "account_id": account_id,
+        },
+        "last_refresh": datetime.now(timezone.utc).isoformat(),
+    }
+    with open(auth_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+
+
+def _exchange_chatgpt_oauth_code(code: str, verifier: str) -> None:
+    body = urlencode(
+        {
+            "grant_type": "authorization_code",
+            "client_id": CHATGPT_OAUTH_CLIENT_ID,
+            "code": code,
+            "code_verifier": verifier,
+            "redirect_uri": CHATGPT_OAUTH_REDIRECT_URI,
+        }
+    ).encode("utf-8")
+    request = Request(
+        CHATGPT_OAUTH_TOKEN_URL,
+        data=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            tokens = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"Token exchange failed: {exc}") from exc
+
+    _write_chatgpt_oauth_auth(tokens)
+
+
+def _close_chatgpt_oauth_callback_server() -> None:
+    with CHATGPT_OAUTH_LOCK:
+        server = CHATGPT_OAUTH_STATE.get("callback_server")
+        CHATGPT_OAUTH_STATE["callback_server"] = None
+    if server is not None:
+        try:
+            server.shutdown()
+            server.server_close()
+        except Exception:
+            pass
+
+
+def _start_chatgpt_oauth_callback_server(expected_state: str) -> bool:
+    _close_chatgpt_oauth_callback_server()
+
+    class CallbackHandler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args) -> None:
+            return
+
+        def do_GET(self) -> None:
+            parsed = urlparse(self.path)
+            if parsed.path != "/auth/callback":
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b"Not found")
+                return
+
+            params = parse_qs(parsed.query)
+            state = params.get("state", [None])[0]
+            code = params.get("code", [None])[0]
+            if state != expected_state:
+                with CHATGPT_OAUTH_LOCK:
+                    CHATGPT_OAUTH_STATE["callback_error"] = "State mismatch."
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"State mismatch. You can close this page and retry login.")
+                return
+            if not code:
+                with CHATGPT_OAUTH_LOCK:
+                    CHATGPT_OAUTH_STATE["callback_error"] = "Missing authorization code."
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Missing authorization code. You can close this page and retry login.")
+                return
+
+            with CHATGPT_OAUTH_LOCK:
+                CHATGPT_OAUTH_STATE["callback_code"] = code
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"<html><body>ChatGPT OAuth completed. You can close this window.</body></html>")
+
+    try:
+        server = HTTPServer((CHATGPT_OAUTH_CALLBACK_HOST, CHATGPT_OAUTH_CALLBACK_PORT), CallbackHandler)
+    except OSError as exc:
+        with CHATGPT_OAUTH_LOCK:
+            CHATGPT_OAUTH_STATE["callback_error"] = (
+                f"Could not bind {CHATGPT_OAUTH_CALLBACK_HOST}:{CHATGPT_OAUTH_CALLBACK_PORT}; "
+                "manual paste is required."
+            )
+            CHATGPT_OAUTH_STATE["login_output"] = [str(exc)]
+        return False
+
+    with CHATGPT_OAUTH_LOCK:
+        CHATGPT_OAUTH_STATE["callback_server"] = server
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return True
+
+
+def _build_chatgpt_oauth_authorize_url() -> str:
+    verifier, challenge = _generate_pkce()
+    state = secrets.token_urlsafe(24)
+    params = {
+        "response_type": "code",
+        "client_id": CHATGPT_OAUTH_CLIENT_ID,
+        "redirect_uri": CHATGPT_OAUTH_REDIRECT_URI,
+        "scope": CHATGPT_OAUTH_SCOPE,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+        "state": state,
+        "id_token_add_organizations": "true",
+        "codex_cli_simplified_flow": "true",
+        "originator": "openclaw_compatible",
+    }
+    auth_url = f"{CHATGPT_OAUTH_AUTHORIZE_URL}?{urlencode(params)}"
+    with CHATGPT_OAUTH_LOCK:
+        CHATGPT_OAUTH_STATE["login_url"] = auth_url
+        CHATGPT_OAUTH_STATE["login_code"] = None
+        CHATGPT_OAUTH_STATE["login_mode"] = "pkce"
+        CHATGPT_OAUTH_STATE["login_verifier"] = verifier
+        CHATGPT_OAUTH_STATE["login_state"] = state
+        CHATGPT_OAUTH_STATE["callback_code"] = None
+        CHATGPT_OAUTH_STATE["callback_error"] = None
+        CHATGPT_OAUTH_STATE["login_output"] = [
+            "Open the authorization URL, then either let the local callback complete or paste the final redirect URL/code."
+        ]
+    _start_chatgpt_oauth_callback_server(state)
+    return auth_url
+
+
+def _complete_chatgpt_oauth_login(authorization_input: str | None = None) -> dict:
+    with CHATGPT_OAUTH_LOCK:
+        verifier = CHATGPT_OAUTH_STATE.get("login_verifier")
+        expected_state = CHATGPT_OAUTH_STATE.get("login_state")
+        callback_code = CHATGPT_OAUTH_STATE.get("callback_code")
+
+    if not verifier:
+        raise RuntimeError("No pending ChatGPT OAuth login flow. Click Login first.")
+
+    code, state = _parse_authorization_input(authorization_input or "")
+    if not code:
+        code = callback_code
+    if state and state != expected_state:
+        raise RuntimeError("State mismatch. Start a new ChatGPT OAuth login.")
+    if not code:
+        raise RuntimeError("No authorization code was provided yet.")
+
+    _exchange_chatgpt_oauth_code(code, verifier)
+    _close_chatgpt_oauth_callback_server()
+    with CHATGPT_OAUTH_LOCK:
+        CHATGPT_OAUTH_STATE["login_verifier"] = None
+        CHATGPT_OAUTH_STATE["login_state"] = None
+        CHATGPT_OAUTH_STATE["callback_code"] = None
+        CHATGPT_OAUTH_STATE["callback_error"] = None
+        CHATGPT_OAUTH_STATE["login_output"] = ["ChatGPT OAuth login completed."]
+    return _get_chatgpt_oauth_status()
+
+
 def _is_chatgpt_oauth_proxy_running() -> bool:
     import urllib.request
 
@@ -198,6 +443,9 @@ def _get_chatgpt_oauth_status() -> dict:
         login_url = CHATGPT_OAUTH_STATE.get("login_url")
         login_code = CHATGPT_OAUTH_STATE.get("login_code")
         login_mode = CHATGPT_OAUTH_STATE.get("login_mode")
+        callback_error = CHATGPT_OAUTH_STATE.get("callback_error")
+        callback_code = CHATGPT_OAUTH_STATE.get("callback_code")
+        pending_state = CHATGPT_OAUTH_STATE.get("login_state")
         login_output = list(CHATGPT_OAUTH_STATE.get("login_output", []))
         proxy_output = list(CHATGPT_OAUTH_STATE.get("proxy_output", []))
 
@@ -209,6 +457,9 @@ def _get_chatgpt_oauth_status() -> dict:
         "authUrl": login_url,
         "deviceCode": login_code,
         "loginMode": login_mode,
+        "authorizationPending": bool(pending_state),
+        "callbackReceived": bool(callback_code),
+        "callbackError": callback_error,
         "proxyBaseUrl": CHATGPT_OAUTH_PROXY_BASE_URL,
         "models": CHATGPT_OAUTH_MODELS.split(","),
         "loginOutputTail": login_output[-10:],
@@ -1697,37 +1948,34 @@ def test_hf_connection():
 
 @app.route("/api/chatgpt-oauth/status", methods=["GET"])
 def chatgpt_oauth_status():
+    with CHATGPT_OAUTH_LOCK:
+        callback_code = CHATGPT_OAUTH_STATE.get("callback_code")
+        verifier = CHATGPT_OAUTH_STATE.get("login_verifier")
+    if callback_code and verifier:
+        try:
+            return jsonify(_complete_chatgpt_oauth_login()), 200
+        except Exception as exc:
+            with CHATGPT_OAUTH_LOCK:
+                CHATGPT_OAUTH_STATE["callback_error"] = str(exc)
     return jsonify(_get_chatgpt_oauth_status()), 200
 
 
 @app.route("/api/chatgpt-oauth/login/start", methods=["POST"])
 def start_chatgpt_oauth_login():
-    npx = _resolve_executable("npx")
+    _build_chatgpt_oauth_authorize_url()
+    return jsonify(_get_chatgpt_oauth_status()), 200
 
-    with CHATGPT_OAUTH_LOCK:
-        process = CHATGPT_OAUTH_STATE.get("login_process")
-        if not _is_process_running(process):
-            CHATGPT_OAUTH_STATE["login_url"] = None
-            CHATGPT_OAUTH_STATE["login_code"] = None
-            CHATGPT_OAUTH_STATE["login_mode"] = "device"
-            CHATGPT_OAUTH_STATE["login_output"] = []
-            CHATGPT_OAUTH_STATE["login_process"] = _start_process(
-                [npx, "-y", "@openai/codex", "login", "--device-auth"],
-                "login_output",
-            )
 
-    deadline = time.time() + 20
-    while time.time() < deadline:
+@app.route("/api/chatgpt-oauth/login/complete", methods=["POST"])
+def complete_chatgpt_oauth_login():
+    data = request.json or {}
+    authorization_input = str(data.get("authorizationInput") or data.get("code") or "").strip()
+    try:
+        return jsonify(_complete_chatgpt_oauth_login(authorization_input)), 200
+    except Exception as exc:
         status = _get_chatgpt_oauth_status()
-        if status.get("authUrl") or status.get("authenticated"):
-            return jsonify(status), 200
-        if not status.get("loginRunning"):
-            break
-        time.sleep(0.25)
-
-    status = _get_chatgpt_oauth_status()
-    status["error"] = "Timed out waiting for the ChatGPT OAuth device authorization URL."
-    return jsonify(status), 202
+        status["error"] = str(exc)
+        return jsonify(status), 400
 
 
 @app.route("/api/chatgpt-oauth/proxy/start", methods=["POST"])
