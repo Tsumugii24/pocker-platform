@@ -1,4 +1,9 @@
 import json
+import os
+import re
+import shutil
+import subprocess
+import time
 import traceback
 
 from flask import Flask, Response, jsonify, request, stream_with_context
@@ -66,6 +71,137 @@ def _get_loaded_game_data(data_file_str: str):
 
 currently_solving = set()
 solve_lock = threading.Lock()
+
+CHATGPT_OAUTH_MODELS = "gpt-5.5,gpt-5.4"
+CHATGPT_OAUTH_PROXY_PORT = 10531
+CHATGPT_OAUTH_PROXY_BASE_URL = f"http://127.0.0.1:{CHATGPT_OAUTH_PROXY_PORT}/v1"
+CHATGPT_OAUTH_AUTH_URL_RE = re.compile(r"https://auth\.openai\.com/oauth/authorize\?\S+")
+CHATGPT_OAUTH_LOCK = threading.Lock()
+CHATGPT_OAUTH_STATE: dict = {
+    "login_process": None,
+    "login_url": None,
+    "login_output": [],
+    "proxy_process": None,
+    "proxy_output": [],
+}
+
+
+def _resolve_executable(name: str) -> str:
+    return shutil.which(f"{name}.cmd") or shutil.which(name) or name
+
+
+def _subprocess_creation_flags() -> int:
+    if os.name == "nt":
+        return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return 0
+
+
+def _append_process_output(output_key: str, line: str) -> None:
+    with CHATGPT_OAUTH_LOCK:
+        output = CHATGPT_OAUTH_STATE.setdefault(output_key, [])
+        output.append(line.rstrip())
+        del output[:-120]
+
+
+def _watch_chatgpt_oauth_process(process: subprocess.Popen, output_key: str) -> None:
+    try:
+        if process.stdout is None:
+            return
+        for line in process.stdout:
+            _append_process_output(output_key, line)
+            match = CHATGPT_OAUTH_AUTH_URL_RE.search(line)
+            if match:
+                with CHATGPT_OAUTH_LOCK:
+                    CHATGPT_OAUTH_STATE["login_url"] = match.group(0)
+    finally:
+        try:
+            process.wait(timeout=1)
+        except Exception:
+            pass
+
+
+def _start_process(command: list[str], output_key: str) -> subprocess.Popen:
+    process = subprocess.Popen(
+        command,
+        cwd=str(current_dir.parent),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=_subprocess_creation_flags(),
+    )
+    watcher = threading.Thread(
+        target=_watch_chatgpt_oauth_process,
+        args=(process, output_key),
+        daemon=True,
+    )
+    watcher.start()
+    return process
+
+
+def _chatgpt_oauth_auth_paths() -> list[Path]:
+    home = Path.home()
+    paths: list[Path] = []
+    for env_name in ("CHATGPT_LOCAL_HOME", "CODEX_HOME"):
+        env_value = os.getenv(env_name)
+        if env_value:
+            paths.append(Path(env_value) / "auth.json")
+    paths.extend(
+        [
+            home / ".chatgpt-local" / "auth.json",
+            home / ".codex" / "auth.json",
+        ]
+    )
+    return paths
+
+
+def _has_chatgpt_oauth_auth_file() -> bool:
+    for auth_path in _chatgpt_oauth_auth_paths():
+        if auth_path.exists() and auth_path.is_file():
+            try:
+                return auth_path.stat().st_size > 0
+            except OSError:
+                return True
+    return False
+
+
+def _is_process_running(process: subprocess.Popen | None) -> bool:
+    return process is not None and process.poll() is None
+
+
+def _is_chatgpt_oauth_proxy_running() -> bool:
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(
+            f"{CHATGPT_OAUTH_PROXY_BASE_URL}/models",
+            timeout=1.5,
+        ) as response:
+            return 200 <= response.status < 500
+    except Exception:
+        return False
+
+
+def _get_chatgpt_oauth_status() -> dict:
+    with CHATGPT_OAUTH_LOCK:
+        login_process = CHATGPT_OAUTH_STATE.get("login_process")
+        proxy_process = CHATGPT_OAUTH_STATE.get("proxy_process")
+        login_url = CHATGPT_OAUTH_STATE.get("login_url")
+        login_output = list(CHATGPT_OAUTH_STATE.get("login_output", []))
+        proxy_output = list(CHATGPT_OAUTH_STATE.get("proxy_output", []))
+
+    return {
+        "authenticated": _has_chatgpt_oauth_auth_file(),
+        "proxyRunning": _is_chatgpt_oauth_proxy_running(),
+        "loginRunning": _is_process_running(login_process),
+        "proxyProcessRunning": _is_process_running(proxy_process),
+        "authUrl": login_url,
+        "proxyBaseUrl": CHATGPT_OAUTH_PROXY_BASE_URL,
+        "models": CHATGPT_OAUTH_MODELS.split(","),
+        "loginOutputTail": login_output[-10:],
+        "proxyOutputTail": proxy_output[-10:],
+    }
 
 
 class ApiRouteError(Exception):
@@ -1204,6 +1340,9 @@ def river_exploit_stream():
         model_raw = data.get("model")
         if model_raw is None:
             model_raw = data.get("riverExploitModel")
+        provider_raw = data.get("provider")
+        if provider_raw is None:
+            provider_raw = data.get("riverExploitProvider")
         timeout_seconds_raw = data.get("timeoutSeconds")
         if timeout_seconds_raw is None:
             timeout_seconds_raw = data.get("timeout_seconds")
@@ -1214,14 +1353,18 @@ def river_exploit_stream():
 
         from river_llm_exploit import (
             build_user_prompt,
+            create_reasoning_summary_response,
             extract_json_block,
             get_system_prompt,
-            is_reasoning_enabled,
             normalize_prompt_language,
             normalize_frequency_map,
+            normalize_llm_provider,
             normalize_timeout_seconds,
+            supports_reasoning_summary,
+            supports_visible_reasoning_output,
             stream_reasoning_and_output,
         )
+        selected_provider = normalize_llm_provider(str(provider_raw or "modelscope").strip() or "modelscope")
         prompt_language = normalize_prompt_language(
             None if prompt_language_raw is None else str(prompt_language_raw)
         )
@@ -1249,7 +1392,11 @@ def river_exploit_stream():
             baseline_detail=strategy_context.get("decision_detail", "No baseline was available."),
             language=prompt_language,
         )
-        reasoning_supported = is_reasoning_enabled(reasoning_override)
+        reasoning_supported = supports_visible_reasoning_output(
+            selected_provider,
+            selected_model,
+            reasoning_override,
+        )
 
         @stream_with_context
         def generate():
@@ -1283,39 +1430,97 @@ def river_exploit_stream():
             final_parts: list[str] = []
 
             try:
-                llm_stream, model = stream_reasoning_and_output(
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    model=selected_model,
-                    reasoning_enabled=reasoning_override,
-                    timeout_seconds=timeout_seconds,
+                use_reasoning_summary = supports_reasoning_summary(
+                    selected_provider,
+                    selected_model,
+                    reasoning_override,
                 )
-                print(
-                    f"[River LLM] Starting exploit stream for {ai_hand} "
-                    f"with model: {model}, timeout: {timeout_seconds:.1f}s"
-                )
-                yield _stream_json_line(
-                    "meta",
-                    model=model,
-                    decision_mode="river_llm_exploit",
-                    reasoning_supported=reasoning_supported,
-                )
+                if use_reasoning_summary:
+                    try:
+                        reasoning_text, final_text, model = create_reasoning_summary_response(
+                            system_prompt=system_prompt,
+                            user_prompt=user_prompt,
+                            provider=selected_provider,
+                            model=selected_model,
+                            reasoning_enabled=reasoning_override,
+                            timeout_seconds=timeout_seconds,
+                        )
+                        print(
+                            f"[River LLM] Completed Responses API exploit request for {ai_hand} "
+                            f"with model: {model}, timeout: {timeout_seconds:.1f}s"
+                        )
+                        yield _stream_json_line(
+                            "meta",
+                            model=model,
+                            provider=selected_provider,
+                            decision_mode="river_llm_exploit",
+                            reasoning_supported=reasoning_supported,
+                        )
+                        if reasoning_text:
+                            reasoning_parts.append(reasoning_text)
+                            yield _stream_json_line("reasoning_delta", content=reasoning_text)
+                        else:
+                            no_summary_message = (
+                                "The Responses API request completed, but this provider did not return "
+                                "a reasoning summary. OpenAI does not expose raw reasoning tokens; only "
+                                "`reasoning.summary` can be displayed when the provider returns it."
+                            )
+                            reasoning_parts.append(no_summary_message)
+                            yield _stream_json_line("reasoning_delta", content=no_summary_message)
+                            yield _stream_json_line(
+                                "warning",
+                                message="No reasoning summary was returned by the selected provider.",
+                            )
+                        if final_text:
+                            final_parts.append(final_text)
+                            yield _stream_json_line("final_delta", content=final_text)
+                    except Exception as summary_exc:
+                        print(f"[River LLM] Reasoning summary request failed: {summary_exc}")
+                        yield _stream_json_line(
+                            "warning",
+                            message=(
+                                f"Reasoning summary was unavailable from {selected_provider}; "
+                                "continuing with final output only."
+                            ),
+                        )
+                        use_reasoning_summary = False
 
-                for chunk in llm_stream:
-                    if not chunk.choices:
-                        continue
+                if not use_reasoning_summary:
+                    llm_stream, model = stream_reasoning_and_output(
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        provider=selected_provider,
+                        model=selected_model,
+                        reasoning_enabled=reasoning_override,
+                        timeout_seconds=timeout_seconds,
+                    )
+                    print(
+                        f"[River LLM] Starting exploit stream for {ai_hand} "
+                        f"with model: {model}, timeout: {timeout_seconds:.1f}s"
+                    )
+                    yield _stream_json_line(
+                        "meta",
+                        model=model,
+                        provider=selected_provider,
+                        decision_mode="river_llm_exploit",
+                        reasoning_supported=selected_provider == "modelscope" and reasoning_supported,
+                    )
 
-                    delta = chunk.choices[0].delta
-                    reasoning_delta = getattr(delta, "reasoning_content", "") or ""
-                    content_delta = delta.content or ""
+                    for chunk in llm_stream:
+                        if not chunk.choices:
+                            continue
 
-                    if reasoning_delta:
-                        reasoning_parts.append(reasoning_delta)
-                        yield _stream_json_line("reasoning_delta", content=reasoning_delta)
+                        delta = chunk.choices[0].delta
+                        reasoning_delta = getattr(delta, "reasoning_content", "") or ""
+                        content_delta = delta.content or ""
 
-                    if content_delta:
-                        final_parts.append(content_delta)
-                        yield _stream_json_line("final_delta", content=content_delta)
+                        if reasoning_delta:
+                            reasoning_parts.append(reasoning_delta)
+                            yield _stream_json_line("reasoning_delta", content=reasoning_delta)
+
+                        if content_delta:
+                            final_parts.append(content_delta)
+                            yield _stream_json_line("final_delta", content=content_delta)
 
                 final_text = "".join(final_parts)
                 parsed_output = extract_json_block(final_text)
@@ -1476,6 +1681,75 @@ def test_hf_connection():
             results[result_key] = {"status": "failed", "error": str(exc)}
 
     return jsonify(results), 200
+
+
+@app.route("/api/chatgpt-oauth/status", methods=["GET"])
+def chatgpt_oauth_status():
+    return jsonify(_get_chatgpt_oauth_status()), 200
+
+
+@app.route("/api/chatgpt-oauth/login/start", methods=["POST"])
+def start_chatgpt_oauth_login():
+    npx = _resolve_executable("npx")
+
+    with CHATGPT_OAUTH_LOCK:
+        process = CHATGPT_OAUTH_STATE.get("login_process")
+        if not _is_process_running(process):
+            CHATGPT_OAUTH_STATE["login_url"] = None
+            CHATGPT_OAUTH_STATE["login_output"] = []
+            CHATGPT_OAUTH_STATE["login_process"] = _start_process(
+                [npx, "-y", "@openai/codex", "login"],
+                "login_output",
+            )
+
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        status = _get_chatgpt_oauth_status()
+        if status.get("authUrl") or status.get("authenticated"):
+            return jsonify(status), 200
+        if not status.get("loginRunning"):
+            break
+        time.sleep(0.25)
+
+    status = _get_chatgpt_oauth_status()
+    status["error"] = "Timed out waiting for the ChatGPT OAuth authorization URL."
+    return jsonify(status), 202
+
+
+@app.route("/api/chatgpt-oauth/proxy/start", methods=["POST"])
+def start_chatgpt_oauth_proxy():
+    if _is_chatgpt_oauth_proxy_running():
+        return jsonify(_get_chatgpt_oauth_status()), 200
+
+    npx = _resolve_executable("npx")
+    with CHATGPT_OAUTH_LOCK:
+        process = CHATGPT_OAUTH_STATE.get("proxy_process")
+        if not _is_process_running(process):
+            CHATGPT_OAUTH_STATE["proxy_output"] = []
+            CHATGPT_OAUTH_STATE["proxy_process"] = _start_process(
+                [
+                    npx,
+                    "-y",
+                    "openai-oauth",
+                    "--port",
+                    str(CHATGPT_OAUTH_PROXY_PORT),
+                    "--models",
+                    CHATGPT_OAUTH_MODELS,
+                ],
+                "proxy_output",
+            )
+
+    deadline = time.time() + 12
+    while time.time() < deadline:
+        status = _get_chatgpt_oauth_status()
+        if status.get("proxyRunning"):
+            return jsonify(status), 200
+        time.sleep(0.5)
+
+    status = _get_chatgpt_oauth_status()
+    if not status.get("proxyRunning"):
+        status["error"] = "Started openai-oauth, but the local proxy is not ready yet."
+    return jsonify(status), 202
 
 
 if __name__ == "__main__":

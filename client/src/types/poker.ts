@@ -11,6 +11,7 @@ export type Position = 'UTG' | 'HJ' | 'CO' | 'BTN' | 'SB' | 'BB';
 export type ActionType = 'fold' | 'check' | 'call' | 'bet' | 'raise' | 'allin';
 export type ActionActor = 'hero' | 'ai' | 'other';
 export type RiverExploitPromptLanguage = 'en' | 'zh';
+export type RiverExploitProviderId = 'modelscope' | 'zenmux' | 'chatgpt-oauth';
 export type RiverExploitModelId = string;
 
 export interface Action {
@@ -55,6 +56,7 @@ export interface TestConfig {
   enableRiverLLMExploit?: boolean;
   enableRiverLLMReasoning?: boolean;
   riverExploitPromptLanguage?: RiverExploitPromptLanguage;
+  riverExploitProvider?: RiverExploitProviderId;
   riverExploitModel?: RiverExploitModelId;
   riverExploitTimeoutSeconds?: number;
 }
@@ -76,6 +78,7 @@ export const DEFAULT_TEST_CONFIG: TestConfig = {
   enableRiverLLMExploit: false,
   enableRiverLLMReasoning: false,
   riverExploitPromptLanguage: 'en',
+  riverExploitProvider: 'modelscope',
   riverExploitModel: 'Qwen/Qwen3-32B',
   riverExploitTimeoutSeconds: 60,
 };

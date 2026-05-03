@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -6,12 +6,29 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import type { TestConfig } from '@/types/poker';
 import { normalizeTestConfig } from '@/lib/test-config';
-import { getRiverExploitModelById, RIVER_EXPLOIT_MODELS } from '@/lib/llm-models';
+import {
+  getDefaultRiverExploitModelForProvider,
+  getRiverExploitModelById,
+  getRiverExploitModelsByProvider,
+  getRiverExploitProviderById,
+  LLM_PROVIDERS,
+} from '@/lib/llm-models';
 import { FRONTEND_TABLE_CONFIG } from '@/config/frontend-config';
 
 interface NetworkTestResult {
   status: 'pending' | 'ok' | 'failed' | 'idle';
   latency_ms?: number;
+  error?: string;
+}
+
+interface ChatGptOauthStatus {
+  authenticated: boolean;
+  proxyRunning: boolean;
+  loginRunning: boolean;
+  proxyProcessRunning: boolean;
+  authUrl?: string | null;
+  proxyBaseUrl?: string;
+  models?: string[];
   error?: string;
 }
 
@@ -37,11 +54,84 @@ export function SettingsDialog({
   const testFeatureCheckboxClassName = `${checkboxClassName} accent-[#ff8c00] disabled:cursor-not-allowed disabled:opacity-50`;
   const [tempSizes, setTempSizes] = useState<number[]>(quickBetSizes);
   const [tempTestConfig, setTempTestConfig] = useState<TestConfig>(normalizeTestConfig(testConfig));
-  const selectedRiverModel = getRiverExploitModelById(tempTestConfig.riverExploitModel);
+  const selectedRiverProvider = getRiverExploitProviderById(tempTestConfig.riverExploitProvider);
+  const riverModelsForProvider = getRiverExploitModelsByProvider(selectedRiverProvider.id);
+  const selectedRiverModel = getRiverExploitModelById(
+    tempTestConfig.riverExploitModel,
+    selectedRiverProvider.id,
+  );
   const supportsRiverReasoning = selectedRiverModel.supportsThinking;
 
   const [hfTest, setHfTest] = useState<NetworkTestResult>({ status: 'idle' });
   const [mirrorTest, setMirrorTest] = useState<NetworkTestResult>({ status: 'idle' });
+  const [chatGptOauthStatus, setChatGptOauthStatus] = useState<ChatGptOauthStatus | null>(null);
+  const [isChatGptOauthBusy, setIsChatGptOauthBusy] = useState(false);
+
+  const refreshChatGptOauthStatus = useCallback(async (autoStartProxy = false) => {
+    const statusResponse = await fetch('/api/chatgpt-oauth/status');
+    const status = await statusResponse.json() as ChatGptOauthStatus;
+
+    if (autoStartProxy && status.authenticated && !status.proxyRunning) {
+      const proxyResponse = await fetch('/api/chatgpt-oauth/proxy/start', {
+        method: 'POST',
+      });
+      const proxyStatus = await proxyResponse.json() as ChatGptOauthStatus;
+      setChatGptOauthStatus(proxyStatus);
+      return proxyStatus;
+    }
+
+    setChatGptOauthStatus(status);
+    return status;
+  }, []);
+
+  const handleChatGptOauthLogin = async () => {
+    setIsChatGptOauthBusy(true);
+    try {
+      const response = await fetch('/api/chatgpt-oauth/login/start', {
+        method: 'POST',
+      });
+      const status = await response.json() as ChatGptOauthStatus;
+      setChatGptOauthStatus(status);
+      if (status.authUrl) {
+        const authWindow = window.open(status.authUrl, '_blank', 'noopener,noreferrer');
+        if (!authWindow) {
+          window.location.assign(status.authUrl);
+        }
+      }
+      if (status.authenticated) {
+        await refreshChatGptOauthStatus(true);
+      }
+    } catch (err) {
+      setChatGptOauthStatus(prev => ({
+        authenticated: false,
+        proxyRunning: false,
+        loginRunning: false,
+        proxyProcessRunning: false,
+        ...(prev ?? {}),
+        error: err instanceof Error ? err.message : 'Failed to start ChatGPT OAuth login.',
+      }));
+    } finally {
+      setIsChatGptOauthBusy(false);
+    }
+  };
+
+  const handleChatGptOauthProxyStart = async () => {
+    setIsChatGptOauthBusy(true);
+    try {
+      await refreshChatGptOauthStatus(true);
+    } catch (err) {
+      setChatGptOauthStatus(prev => ({
+        authenticated: false,
+        proxyRunning: false,
+        loginRunning: false,
+        proxyProcessRunning: false,
+        ...(prev ?? {}),
+        error: err instanceof Error ? err.message : 'Failed to start ChatGPT OAuth proxy.',
+      }));
+    } finally {
+      setIsChatGptOauthBusy(false);
+    }
+  };
 
   useEffect(() => {
     setTempSizes(quickBetSizes);
@@ -53,6 +143,19 @@ export function SettingsDialog({
       setTempTestConfig(prev => ({ ...prev, enableRiverLLMReasoning: false }));
     }
   }, [supportsRiverReasoning, tempTestConfig.enableRiverLLMReasoning]);
+
+  useEffect(() => {
+    if (!isOpen || selectedRiverProvider.id !== 'chatgpt-oauth') {
+      return;
+    }
+
+    void refreshChatGptOauthStatus(true);
+    const interval = window.setInterval(() => {
+      void refreshChatGptOauthStatus(true);
+    }, 3000);
+
+    return () => window.clearInterval(interval);
+  }, [isOpen, refreshChatGptOauthStatus, selectedRiverProvider.id]);
 
   const handleSave = () => {
     onQuickBetSizesChange(tempSizes);
@@ -416,20 +519,128 @@ export function SettingsDialog({
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <div className="flex items-center gap-2">
+                      <Label className="text-sm font-medium">River Exploit Provider</Label>
+                      <Badge variant="outline" className="border-[#ff8c00]/40 text-[#ffb347]">
+                        Test Feature
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      {selectedRiverProvider.description}
+                    </p>
+                    <p className="mt-1 text-xs text-gray-500">
+                      {selectedRiverProvider.setupHint}
+                    </p>
+                  </div>
+                  <select
+                    value={selectedRiverProvider.id}
+                    disabled={!isTestFeatureEnabled || !(tempTestConfig.enableRiverLLMExploit ?? false)}
+                    onChange={(e) => {
+                      const provider = getRiverExploitProviderById(e.target.value);
+                      const defaultModel = getDefaultRiverExploitModelForProvider(provider.id);
+                      setTempTestConfig(prev => ({
+                        ...prev,
+                        riverExploitProvider: provider.id,
+                        riverExploitModel: defaultModel.id,
+                        enableRiverLLMReasoning: defaultModel.supportsThinking
+                          ? prev.enableRiverLLMReasoning
+                          : false,
+                      }));
+                    }}
+                    className="min-w-[180px] rounded border border-[#333333] bg-[#1a1a1a] px-3 py-2 text-sm text-gray-300 focus:outline-none focus:border-[#00d084] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {LLM_PROVIDERS.map(provider => (
+                      <option key={provider.id} value={provider.id}>
+                        {provider.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {selectedRiverProvider.credentialType === 'chatgpt-oauth' && (
+                  <div className="mt-3 rounded border border-[#333333] bg-[#0f0f0f] p-3 text-xs text-gray-300">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="font-medium text-[#8bc2ff]">ChatGPT OAuth</div>
+                        <div className="mt-1 text-[11px] text-gray-500">
+                          Login opens the ChatGPT verification page. The local proxy starts automatically after login.
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={handleChatGptOauthLogin}
+                          disabled={isChatGptOauthBusy}
+                          className="bg-[#1f6feb] px-3 py-1 text-xs text-white hover:bg-[#1f6feb]/90 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {chatGptOauthStatus?.authenticated ? 'Re-login' : 'Login'}
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={handleChatGptOauthProxyStart}
+                          disabled={isChatGptOauthBusy || !chatGptOauthStatus?.authenticated}
+                          className="border-[#333333] px-3 py-1 text-xs hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Start Proxy
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-[11px]">
+                      <span className={`rounded-full border px-2 py-1 ${chatGptOauthStatus?.authenticated ? 'border-[#00d084]/40 text-[#7af0b5]' : 'border-[#333333] text-gray-500'}`}>
+                        Login {chatGptOauthStatus?.authenticated ? 'ready' : 'required'}
+                      </span>
+                      <span className={`rounded-full border px-2 py-1 ${chatGptOauthStatus?.proxyRunning ? 'border-[#00d084]/40 text-[#7af0b5]' : 'border-[#333333] text-gray-500'}`}>
+                        Proxy {chatGptOauthStatus?.proxyRunning ? 'running' : 'stopped'}
+                      </span>
+                      {chatGptOauthStatus?.loginRunning && (
+                        <span className="rounded-full border border-[#4ea1ff]/40 px-2 py-1 text-[#8bc2ff]">
+                          Waiting for verification
+                        </span>
+                      )}
+                    </div>
+                    {chatGptOauthStatus?.proxyBaseUrl && (
+                      <p className="mt-2 text-[11px] text-gray-500">
+                        Proxy URL: {chatGptOauthStatus.proxyBaseUrl}
+                      </p>
+                    )}
+                    {chatGptOauthStatus?.error && (
+                      <p className="mt-2 text-[11px] text-red-400">
+                        {chatGptOauthStatus.error}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="ml-5 rounded-lg border border-[#222222] bg-black/20 px-4 py-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
                       <Label className="text-sm font-medium">River Exploit Model</Label>
                       <Badge variant="outline" className="border-[#ff8c00]/40 text-[#ffb347]">
                         Test Feature
                       </Badge>
                     </div>
                     <p className="text-xs text-gray-500">
-                      Select the model used by the river exploit call. The default follows the playground model list.
+                      Select the model used by the river exploit call. The list is filtered by provider.
                     </p>
                     <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
+                      {selectedRiverModel.size > 0 && (
+                        <span className="rounded-full border border-[#333333] px-2 py-1 text-gray-400">
+                          {selectedRiverModel.size}B
+                        </span>
+                      )}
                       <span className="rounded-full border border-[#333333] px-2 py-1 text-gray-400">
-                        {selectedRiverModel.size}B
+                        {selectedRiverProvider.name}
                       </span>
+                      {selectedRiverProvider.limitLabel && (
+                        <span className="rounded-full border border-[#ff8c00]/40 px-2 py-1 text-[#ffb347]">
+                          Limit {selectedRiverProvider.limitLabel}
+                        </span>
+                      )}
                       <span className={`rounded-full border px-2 py-1 ${supportsRiverReasoning ? 'border-[#4ea1ff]/40 text-[#8bc2ff]' : 'border-[#333333] text-gray-500'}`}>
-                        Thinking {supportsRiverReasoning ? 'on' : 'off'}
+                        Reasoning output {supportsRiverReasoning ? 'on' : 'off'}
                       </span>
                       <span className={`rounded-full border px-2 py-1 ${selectedRiverModel.supportsVision ? 'border-[#00d084]/40 text-[#7af0b5]' : 'border-[#333333] text-gray-500'}`}>
                         Vision {selectedRiverModel.supportsVision ? 'on' : 'off'}
@@ -445,7 +656,7 @@ export function SettingsDialog({
                     }))}
                     className="min-w-[240px] rounded border border-[#333333] bg-[#1a1a1a] px-3 py-2 text-sm text-gray-300 focus:outline-none focus:border-[#00d084] disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {RIVER_EXPLOIT_MODELS.map(model => (
+                    {riverModelsForProvider.map(model => (
                       <option key={model.id} value={model.id}>
                         {model.name}
                       </option>
@@ -490,13 +701,13 @@ export function SettingsDialog({
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <div className="flex items-center gap-2">
-                      <Label className="text-sm font-medium">Enable LLM Reasoning</Label>
+                      <Label className="text-sm font-medium">Show Reasoning Output</Label>
                       <Badge variant="outline" className="border-[#ff8c00]/40 text-[#ffb347]">
                         Test Feature
                       </Badge>
                     </div>
                     <p className="text-xs text-gray-500">
-                      Optional child setting for river exploit. When disabled, the LLM skips the reasoning process and only returns the final output. Default: off.
+                      Controls streamed reasoning text for providers that expose it. OpenAI-compatible providers may still reason internally and return only final output.
                     </p>
                   </div>
                   <input

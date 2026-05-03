@@ -15,6 +15,7 @@ cache/
 .env
 .env.*
 !.env.example
+ai/provider_usage.json
 
 # Logs
 *.log

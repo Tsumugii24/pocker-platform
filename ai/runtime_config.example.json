@@ -4,10 +4,40 @@
   },
   "llm": {
     "river_exploit": {
+      "provider": "modelscope",
       "model": "Qwen/Qwen3-32B",
       "timeout_seconds": 60,
       "extra_body": {
         "enable_thinking": true
+      },
+      "providers": {
+        "modelscope": {
+          "label": "ModelScope",
+          "model": "Qwen/Qwen3-32B",
+          "api_key_env": "MODELSCOPE_API_KEY",
+          "base_url_env": "MODELSCOPE_BASE_URL",
+          "base_url": null,
+          "extra_body": {
+            "enable_thinking": true
+          }
+        },
+        "zenmux": {
+          "label": "ZenMux",
+          "model": "openai/gpt-5.5",
+          "api_key_env": "ZENMUX_API_KEY",
+          "base_url_env": "ZENMUX_BASE_URL",
+          "base_url": "https://zenmux.ai/api/v1",
+          "extra_body": null,
+          "daily_limit": 10
+        },
+        "chatgpt-oauth": {
+          "label": "ChatGPT OAuth",
+          "model": "gpt-5.5",
+          "api_key_env": "CHATGPT_OAUTH_API_KEY",
+          "base_url_env": "CHATGPT_OAUTH_BASE_URL",
+          "base_url": "http://127.0.0.1:10531/v1",
+          "extra_body": null
+        }
       }
     }
   },

@@ -1099,6 +1099,7 @@ export default function GameTable() {
       ? Math.min(Math.max(Math.round(configuredTimeoutSecondsRaw), 1), 600)
       : DEFAULT_RIVER_EXPLOIT_TIMEOUT_SECONDS;
     const riverReasoningTimeoutMs = timeoutSeconds * 1000;
+    const selectedRiverExploitProvider = latestTestConfigRef.current.riverExploitProvider ?? 'modelscope';
     const selectedRiverExploitModel = latestTestConfigRef.current.riverExploitModel ?? null;
     const requestId = riverExploitRequestIdsRef.current[tableIndex] + 1;
     riverExploitRequestIdsRef.current[tableIndex] = requestId;
@@ -1184,6 +1185,7 @@ export default function GameTable() {
           opponentPosition: heroInfo.position,
           enableReasoning: enableRiverLLMReasoningRef.current,
           promptLanguage: latestTestConfigRef.current.riverExploitPromptLanguage ?? 'en',
+          provider: selectedRiverExploitProvider,
           model: selectedRiverExploitModel,
           timeoutSeconds,
         }),

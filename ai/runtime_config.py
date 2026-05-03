@@ -21,10 +21,40 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     },
     "llm": {
         "river_exploit": {
+            "provider": "modelscope",
             "model": "Qwen/Qwen3-32B",
             "timeout_seconds": 60,
             "extra_body": {
                 "enable_thinking": True,
+            },
+            "providers": {
+                "modelscope": {
+                    "label": "ModelScope",
+                    "model": "Qwen/Qwen3-32B",
+                    "api_key_env": "MODELSCOPE_API_KEY",
+                    "base_url_env": "MODELSCOPE_BASE_URL",
+                    "base_url": None,
+                    "extra_body": {
+                        "enable_thinking": True,
+                    },
+                },
+                "zenmux": {
+                    "label": "ZenMux",
+                    "model": "openai/gpt-5.5",
+                    "api_key_env": "ZENMUX_API_KEY",
+                    "base_url_env": "ZENMUX_BASE_URL",
+                    "base_url": "https://zenmux.ai/api/v1",
+                    "extra_body": None,
+                    "daily_limit": 10,
+                },
+                "chatgpt-oauth": {
+                    "label": "ChatGPT OAuth",
+                    "model": "gpt-5.5",
+                    "api_key_env": "CHATGPT_OAUTH_API_KEY",
+                    "base_url_env": "CHATGPT_OAUTH_BASE_URL",
+                    "base_url": "http://127.0.0.1:10531/v1",
+                    "extra_body": None,
+                },
             },
         }
     },
@@ -86,10 +116,43 @@ def load_ai_env() -> tuple[str, ...]:
     return tuple(loaded_files)
 
 
-def get_openai_credentials() -> tuple[str | None, str | None]:
+def normalize_llm_provider(provider_name: str | None = None) -> str:
+    config = get_river_exploit_config()
+    providers = config.get("providers", {})
+    selected = str(provider_name or config.get("provider") or "modelscope").strip().lower()
+    if selected == "openai-oauth":
+        selected = "chatgpt-oauth"
+    if selected in providers:
+        return selected
+    return "modelscope"
+
+
+def get_river_exploit_provider_config(provider_name: str | None = None) -> dict[str, Any]:
+    config = get_river_exploit_config()
+    providers = config.get("providers", {})
+    provider = normalize_llm_provider(provider_name)
+    provider_config = providers.get(provider)
+    if not isinstance(provider_config, dict):
+        provider_config = {}
+    return copy.deepcopy(provider_config)
+
+
+def get_openai_credentials(provider_name: str | None = None) -> tuple[str | None, str | None]:
     load_ai_env()
-    api_key = os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("BASE_URL") or os.getenv("OPENAI_BASE_URL")
+    provider_config = get_river_exploit_provider_config(provider_name)
+    api_key_env = str(provider_config.get("api_key_env") or "MODELSCOPE_API_KEY")
+    api_key_fallback_env = provider_config.get("api_key_fallback_env")
+    base_url_env = str(provider_config.get("base_url_env") or "MODELSCOPE_BASE_URL")
+    base_url_fallback_env = provider_config.get("base_url_fallback_env")
+    api_key = os.getenv(api_key_env)
+    if not api_key and api_key_fallback_env:
+        api_key = os.getenv(str(api_key_fallback_env))
+    base_url = os.getenv(base_url_env)
+    if not base_url and base_url_fallback_env:
+        base_url = os.getenv(str(base_url_fallback_env))
+    if not base_url:
+        configured_base_url = provider_config.get("base_url")
+        base_url = str(configured_base_url) if configured_base_url else None
     return api_key, base_url
 
 

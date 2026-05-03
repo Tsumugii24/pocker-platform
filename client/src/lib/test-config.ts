@@ -6,8 +6,10 @@ import {
 } from '@/types/poker';
 import {
   DEFAULT_RIVER_EXPLOIT_MODEL_ID,
+  DEFAULT_RIVER_EXPLOIT_PROVIDER_ID,
   DEFAULT_RIVER_EXPLOIT_TIMEOUT_SECONDS,
   getRiverExploitModelById,
+  getRiverExploitProviderById,
 } from '@/lib/llm-models';
 
 interface EffectivePositions {
@@ -30,7 +32,11 @@ export function normalizeTestConfig(config?: Partial<TestConfig>): TestConfig {
   };
   const promptLanguage: RiverExploitPromptLanguage =
     merged.riverExploitPromptLanguage === 'zh' ? 'zh' : 'en';
-  const selectedModel = getRiverExploitModelById(merged.riverExploitModel);
+  const selectedProvider = getRiverExploitProviderById(merged.riverExploitProvider);
+  const selectedModel = getRiverExploitModelById(
+    merged.riverExploitModel,
+    selectedProvider.id,
+  );
   const normalizedTimeoutSecondsRaw = Number(merged.riverExploitTimeoutSeconds);
   const normalizedTimeoutSeconds = Number.isFinite(normalizedTimeoutSecondsRaw)
     ? Math.min(Math.max(Math.round(normalizedTimeoutSecondsRaw), 1), 600)
@@ -42,6 +48,7 @@ export function normalizeTestConfig(config?: Partial<TestConfig>): TestConfig {
       ? Boolean(merged.enableRiverLLMReasoning)
       : false,
     riverExploitPromptLanguage: promptLanguage,
+    riverExploitProvider: selectedProvider.id ?? DEFAULT_RIVER_EXPLOIT_PROVIDER_ID,
     riverExploitModel: selectedModel.id ?? DEFAULT_RIVER_EXPLOIT_MODEL_ID,
     riverExploitTimeoutSeconds: normalizedTimeoutSeconds,
     ...getEffectivePositions(merged),
