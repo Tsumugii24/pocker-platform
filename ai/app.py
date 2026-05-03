@@ -1960,6 +1960,14 @@ def chatgpt_oauth_status():
     return jsonify(_get_chatgpt_oauth_status()), 200
 
 
+@app.route("/api/llm-provider-usage", methods=["GET"])
+def llm_provider_usage():
+    provider = request.args.get("provider", "modelscope")
+    from river_llm_exploit import get_provider_usage_status
+
+    return jsonify(get_provider_usage_status(provider)), 200
+
+
 @app.route("/api/chatgpt-oauth/login/start", methods=["POST"])
 def start_chatgpt_oauth_login():
     _build_chatgpt_oauth_authorize_url()

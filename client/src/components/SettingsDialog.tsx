@@ -38,6 +38,15 @@ interface ChatGptOauthStatus {
   error?: string;
 }
 
+interface ProviderUsageStatus {
+  provider: string;
+  label: string;
+  date: string;
+  used: number;
+  limit: number | null;
+  remaining: number | null;
+}
+
 interface SettingsDialogProps {
   isOpen: boolean;
   onClose: () => void;
@@ -73,6 +82,7 @@ export function SettingsDialog({
   const [chatGptOauthStatus, setChatGptOauthStatus] = useState<ChatGptOauthStatus | null>(null);
   const [isChatGptOauthBusy, setIsChatGptOauthBusy] = useState(false);
   const [chatGptAuthorizationInput, setChatGptAuthorizationInput] = useState('');
+  const [zenMuxUsage, setZenMuxUsage] = useState<ProviderUsageStatus | null>(null);
 
   const refreshChatGptOauthStatus = useCallback(async (autoStartProxy = false) => {
     const statusResponse = await fetch('/api/chatgpt-oauth/status');
@@ -184,6 +194,13 @@ export function SettingsDialog({
     }
   };
 
+  const refreshZenMuxUsage = useCallback(async () => {
+    const response = await fetch('/api/llm-provider-usage?provider=zenmux');
+    const usage = await response.json() as ProviderUsageStatus;
+    setZenMuxUsage(usage);
+    return usage;
+  }, []);
+
   useEffect(() => {
     setTempSizes(quickBetSizes);
     setTempTestConfig(normalizeTestConfig(testConfig));
@@ -207,6 +224,19 @@ export function SettingsDialog({
 
     return () => window.clearInterval(interval);
   }, [isOpen, refreshChatGptOauthStatus, selectedRiverProvider.id]);
+
+  useEffect(() => {
+    if (!isOpen || selectedRiverProvider.id !== 'zenmux') {
+      return;
+    }
+
+    void refreshZenMuxUsage();
+    const interval = window.setInterval(() => {
+      void refreshZenMuxUsage();
+    }, 5000);
+
+    return () => window.clearInterval(interval);
+  }, [isOpen, refreshZenMuxUsage, selectedRiverProvider.id]);
 
   const handleSave = () => {
     onQuickBetSizesChange(tempSizes);
@@ -606,6 +636,47 @@ export function SettingsDialog({
                     ))}
                   </select>
                 </div>
+                {selectedRiverProvider.id === 'zenmux' && (
+                  <div className="mt-3 rounded border border-[#333333] bg-[#0f0f0f] p-3 text-xs text-gray-300">
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <div>
+                        <div className="font-medium text-[#ffb347]">ZenMux daily usage</div>
+                        <div className="mt-1 text-[11px] text-gray-500">
+                          Local counter resets by backend date. Successful ZenMux calls consume one use.
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void refreshZenMuxUsage()}
+                        className="border-[#333333] px-3 py-1 text-xs hover:bg-white/5"
+                      >
+                        Refresh
+                      </Button>
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-[11px]">
+                      <span className="rounded-full border border-[#333333] px-2 py-1 text-gray-400">
+                        Used {zenMuxUsage?.used ?? 0}
+                      </span>
+                      <span className="rounded-full border border-[#ff8c00]/40 px-2 py-1 text-[#ffb347]">
+                        Limit {zenMuxUsage?.limit ?? 10}/day
+                      </span>
+                      <span className={`rounded-full border px-2 py-1 ${
+                        (zenMuxUsage?.remaining ?? 10) > 0
+                          ? 'border-[#00d084]/40 text-[#7af0b5]'
+                          : 'border-[#d04040]/40 text-[#ff9b9b]'
+                      }`}>
+                        Remaining {zenMuxUsage?.remaining ?? 10}
+                      </span>
+                      {zenMuxUsage?.date && (
+                        <span className="rounded-full border border-[#333333] px-2 py-1 text-gray-500">
+                          {zenMuxUsage.date}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
                 {selectedRiverProvider.credentialType === 'chatgpt-oauth' && (
                   <div className="mt-3 rounded border border-[#333333] bg-[#0f0f0f] p-3 text-xs text-gray-300">
                     <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
