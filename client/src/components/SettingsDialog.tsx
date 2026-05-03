@@ -194,6 +194,32 @@ export function SettingsDialog({
     }
   };
 
+  const handleChatGptOauthLogout = async () => {
+    setIsChatGptOauthBusy(true);
+    try {
+      const response = await fetch('/api/chatgpt-oauth/logout', {
+        method: 'POST',
+      });
+      const status = await response.json() as ChatGptOauthStatus;
+      setChatGptAuthorizationInput('');
+      setChatGptOauthStatus(status);
+      if (!response.ok) {
+        throw new Error(status.error || 'Failed to logout ChatGPT OAuth.');
+      }
+    } catch (err) {
+      setChatGptOauthStatus(prev => ({
+        authenticated: false,
+        proxyRunning: false,
+        loginRunning: false,
+        proxyProcessRunning: false,
+        ...(prev ?? {}),
+        error: err instanceof Error ? err.message : 'Failed to logout ChatGPT OAuth.',
+      }));
+    } finally {
+      setIsChatGptOauthBusy(false);
+    }
+  };
+
   const refreshZenMuxUsage = useCallback(async () => {
     const response = await fetch('/api/llm-provider-usage?provider=zenmux');
     const usage = await response.json() as ProviderUsageStatus;
@@ -705,6 +731,23 @@ export function SettingsDialog({
                           className="border-[#333333] px-3 py-1 text-xs hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           Start Proxy
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={handleChatGptOauthLogout}
+                          disabled={
+                            isChatGptOauthBusy ||
+                            !(
+                              chatGptOauthStatus?.authenticated ||
+                              chatGptOauthStatus?.authorizationPending ||
+                              chatGptOauthStatus?.proxyRunning
+                            )
+                          }
+                          className="border-[#5c2a2a] px-3 py-1 text-xs text-[#ff9b9b] hover:bg-[#3a1515] disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Logout
                         </Button>
                       </div>
                     </div>

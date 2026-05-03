@@ -173,18 +173,99 @@ def _chatgpt_oauth_auth_paths() -> list[Path]:
     return paths
 
 
+def _read_chatgpt_oauth_auth_payload(auth_path: Path) -> dict | None:
+    try:
+        with open(auth_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        return payload if isinstance(payload, dict) else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _is_chatgpt_oauth_auth_payload(payload: dict | None) -> bool:
+    if not payload or payload.get("auth_mode") != "chatgpt":
+        return False
+    tokens = payload.get("tokens")
+    if not isinstance(tokens, dict):
+        return False
+    return bool(tokens.get("access_token") and tokens.get("refresh_token"))
+
+
 def _has_chatgpt_oauth_auth_file() -> bool:
     for auth_path in _chatgpt_oauth_auth_paths():
-        if auth_path.exists() and auth_path.is_file():
-            try:
-                return auth_path.stat().st_size > 0
-            except OSError:
-                return True
+        if auth_path.exists() and auth_path.is_file() and _is_chatgpt_oauth_auth_payload(
+            _read_chatgpt_oauth_auth_payload(auth_path)
+        ):
+            return True
     return False
 
 
 def _is_process_running(process: subprocess.Popen | None) -> bool:
     return process is not None and process.poll() is None
+
+
+def _stop_process(process: subprocess.Popen | None) -> None:
+    if not _is_process_running(process):
+        return
+    try:
+        process.terminate()
+        process.wait(timeout=3)
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+
+def _logout_chatgpt_oauth() -> dict:
+    with CHATGPT_OAUTH_LOCK:
+        login_process = CHATGPT_OAUTH_STATE.get("login_process")
+        proxy_process = CHATGPT_OAUTH_STATE.get("proxy_process")
+
+    _stop_process(login_process)
+    _stop_process(proxy_process)
+    _close_chatgpt_oauth_callback_server()
+
+    removed_paths: list[str] = []
+    seen_paths: set[Path] = set()
+    for auth_path in _chatgpt_oauth_auth_paths():
+        resolved_path = auth_path.expanduser()
+        if resolved_path in seen_paths:
+            continue
+        seen_paths.add(resolved_path)
+        if not resolved_path.exists() or not resolved_path.is_file():
+            continue
+        payload = _read_chatgpt_oauth_auth_payload(resolved_path)
+        if not _is_chatgpt_oauth_auth_payload(payload):
+            continue
+        try:
+            resolved_path.unlink()
+            removed_paths.append(str(resolved_path))
+        except OSError as exc:
+            _append_process_output("login_output", f"Could not remove {resolved_path}: {exc}")
+
+    with CHATGPT_OAUTH_LOCK:
+        CHATGPT_OAUTH_STATE.update(
+            {
+                "login_process": None,
+                "login_url": None,
+                "login_code": None,
+                "login_mode": "pkce",
+                "login_verifier": None,
+                "login_state": None,
+                "callback_code": None,
+                "callback_error": None,
+                "callback_server": None,
+                "login_output": (
+                    ["ChatGPT OAuth logged out.", *[f"Removed {path}" for path in removed_paths]]
+                    if removed_paths
+                    else ["ChatGPT OAuth logged out. No local ChatGPT token file was found."]
+                ),
+                "proxy_process": None,
+                "proxy_output": [],
+            }
+        )
+    return _get_chatgpt_oauth_status()
 
 
 def _b64url(data: bytes) -> str:
@@ -1984,6 +2065,11 @@ def complete_chatgpt_oauth_login():
         status = _get_chatgpt_oauth_status()
         status["error"] = str(exc)
         return jsonify(status), 400
+
+
+@app.route("/api/chatgpt-oauth/logout", methods=["POST"])
+def logout_chatgpt_oauth():
+    return jsonify(_logout_chatgpt_oauth()), 200
 
 
 @app.route("/api/chatgpt-oauth/proxy/start", methods=["POST"])
