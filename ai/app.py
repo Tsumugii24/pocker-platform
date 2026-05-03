@@ -75,11 +75,14 @@ solve_lock = threading.Lock()
 CHATGPT_OAUTH_MODELS = "gpt-5.5,gpt-5.4"
 CHATGPT_OAUTH_PROXY_PORT = 10531
 CHATGPT_OAUTH_PROXY_BASE_URL = f"http://127.0.0.1:{CHATGPT_OAUTH_PROXY_PORT}/v1"
-CHATGPT_OAUTH_AUTH_URL_RE = re.compile(r"https://auth\.openai\.com/oauth/authorize\?\S+")
+CHATGPT_OAUTH_AUTH_URL_RE = re.compile(r"https://\S+")
+CHATGPT_OAUTH_DEVICE_CODE_RE = re.compile(r"\b[A-Z0-9]{4}-[A-Z0-9]{4}\b|\b[A-Z0-9]{8}\b")
 CHATGPT_OAUTH_LOCK = threading.Lock()
 CHATGPT_OAUTH_STATE: dict = {
     "login_process": None,
     "login_url": None,
+    "login_code": None,
+    "login_mode": None,
     "login_output": [],
     "proxy_process": None,
     "proxy_output": [],
@@ -109,10 +112,15 @@ def _watch_chatgpt_oauth_process(process: subprocess.Popen, output_key: str) -> 
             return
         for line in process.stdout:
             _append_process_output(output_key, line)
-            match = CHATGPT_OAUTH_AUTH_URL_RE.search(line)
-            if match:
+            url_match = CHATGPT_OAUTH_AUTH_URL_RE.search(line)
+            code_match = CHATGPT_OAUTH_DEVICE_CODE_RE.search(line)
+            if url_match:
+                auth_url = url_match.group(0).rstrip(".,);]")
                 with CHATGPT_OAUTH_LOCK:
-                    CHATGPT_OAUTH_STATE["login_url"] = match.group(0)
+                    CHATGPT_OAUTH_STATE["login_url"] = auth_url
+            if code_match:
+                with CHATGPT_OAUTH_LOCK:
+                    CHATGPT_OAUTH_STATE["login_code"] = code_match.group(0)
     finally:
         try:
             process.wait(timeout=1)
@@ -188,6 +196,8 @@ def _get_chatgpt_oauth_status() -> dict:
         login_process = CHATGPT_OAUTH_STATE.get("login_process")
         proxy_process = CHATGPT_OAUTH_STATE.get("proxy_process")
         login_url = CHATGPT_OAUTH_STATE.get("login_url")
+        login_code = CHATGPT_OAUTH_STATE.get("login_code")
+        login_mode = CHATGPT_OAUTH_STATE.get("login_mode")
         login_output = list(CHATGPT_OAUTH_STATE.get("login_output", []))
         proxy_output = list(CHATGPT_OAUTH_STATE.get("proxy_output", []))
 
@@ -197,6 +207,8 @@ def _get_chatgpt_oauth_status() -> dict:
         "loginRunning": _is_process_running(login_process),
         "proxyProcessRunning": _is_process_running(proxy_process),
         "authUrl": login_url,
+        "deviceCode": login_code,
+        "loginMode": login_mode,
         "proxyBaseUrl": CHATGPT_OAUTH_PROXY_BASE_URL,
         "models": CHATGPT_OAUTH_MODELS.split(","),
         "loginOutputTail": login_output[-10:],
@@ -1696,9 +1708,11 @@ def start_chatgpt_oauth_login():
         process = CHATGPT_OAUTH_STATE.get("login_process")
         if not _is_process_running(process):
             CHATGPT_OAUTH_STATE["login_url"] = None
+            CHATGPT_OAUTH_STATE["login_code"] = None
+            CHATGPT_OAUTH_STATE["login_mode"] = "device"
             CHATGPT_OAUTH_STATE["login_output"] = []
             CHATGPT_OAUTH_STATE["login_process"] = _start_process(
-                [npx, "-y", "@openai/codex", "login"],
+                [npx, "-y", "@openai/codex", "login", "--device-auth"],
                 "login_output",
             )
 
@@ -1712,7 +1726,7 @@ def start_chatgpt_oauth_login():
         time.sleep(0.25)
 
     status = _get_chatgpt_oauth_status()
-    status["error"] = "Timed out waiting for the ChatGPT OAuth authorization URL."
+    status["error"] = "Timed out waiting for the ChatGPT OAuth device authorization URL."
     return jsonify(status), 202
 
 

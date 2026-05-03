@@ -27,8 +27,11 @@ interface ChatGptOauthStatus {
   loginRunning: boolean;
   proxyProcessRunning: boolean;
   authUrl?: string | null;
+  deviceCode?: string | null;
+  loginMode?: string | null;
   proxyBaseUrl?: string;
   models?: string[];
+  loginOutputTail?: string[];
   error?: string;
 }
 
@@ -92,10 +95,15 @@ export function SettingsDialog({
       });
       const status = await response.json() as ChatGptOauthStatus;
       setChatGptOauthStatus(status);
-      if (status.authUrl) {
-        const authWindow = window.open(status.authUrl, '_blank', 'noopener,noreferrer');
+      const authTarget = status.authUrl ?? (
+        status.deviceCode
+          ? `https://auth.openai.com/activate?user_code=${encodeURIComponent(status.deviceCode)}`
+          : null
+      );
+      if (authTarget) {
+        const authWindow = window.open(authTarget, '_blank', 'noopener,noreferrer');
         if (!authWindow) {
-          window.location.assign(status.authUrl);
+          window.location.assign(authTarget);
         }
       }
       if (status.authenticated) {
@@ -561,7 +569,7 @@ export function SettingsDialog({
                       <div>
                         <div className="font-medium text-[#8bc2ff]">ChatGPT OAuth</div>
                         <div className="mt-1 text-[11px] text-gray-500">
-                          Login opens the ChatGPT verification page. The local proxy starts automatically after login.
+                          Login opens the ChatGPT device verification page. The local proxy starts automatically after login.
                         </div>
                       </div>
                       <div className="flex gap-2">
@@ -604,6 +612,16 @@ export function SettingsDialog({
                         Proxy URL: {chatGptOauthStatus.proxyBaseUrl}
                       </p>
                     )}
+                    {chatGptOauthStatus?.deviceCode && (
+                      <p className="mt-2 text-[11px] text-gray-400">
+                        Device code: <span className="font-mono text-[#8bc2ff]">{chatGptOauthStatus.deviceCode}</span>
+                      </p>
+                    )}
+                    {chatGptOauthStatus?.loginOutputTail?.length ? (
+                      <pre className="mt-2 max-h-24 overflow-auto rounded border border-[#222222] bg-black/30 p-2 text-[10px] leading-4 text-gray-500">
+                        {chatGptOauthStatus.loginOutputTail.join('\n')}
+                      </pre>
+                    ) : null}
                     {chatGptOauthStatus?.error && (
                       <p className="mt-2 text-[11px] text-red-400">
                         {chatGptOauthStatus.error}
