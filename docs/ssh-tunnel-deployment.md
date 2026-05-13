@@ -60,6 +60,170 @@ autossh -M 0 -N \
   public_user@PUBLIC_SERVER_IP
 ```
 
+## Persistent Tunnel with autossh and systemd
+
+Plain `ssh -N -R ...` is useful for a quick test, but it can disconnect with errors such as `client_loop: send disconnect: Broken pipe` when the network is unstable or the connection is idle for too long.
+
+For a durable deployment, run the reverse tunnel from the private high-performance server as a `systemd` user service backed by `autossh`.
+
+### 1. Install autossh
+
+Run this on the private high-performance server:
+
+```bash
+sudo apt update
+sudo apt install -y autossh
+```
+
+### 2. Create a dedicated SSH key
+
+Run this on the private high-performance server:
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/gto_tunnel_ed25519 -C "gto-tunnel"
+```
+
+Install the public key on the public server:
+
+```bash
+ssh-copy-id -i ~/.ssh/gto_tunnel_ed25519.pub public_user@PUBLIC_SERVER_IP
+```
+
+Verify that the private server can log in without a password:
+
+```bash
+ssh -i ~/.ssh/gto_tunnel_ed25519 public_user@PUBLIC_SERVER_IP
+```
+
+Exit after the test:
+
+```bash
+exit
+```
+
+### 3. Add an SSH host alias
+
+On the private high-performance server, edit `~/.ssh/config`:
+
+```bash
+vim ~/.ssh/config
+```
+
+Add:
+
+```sshconfig
+Host gto-public
+    HostName PUBLIC_SERVER_IP
+    User public_user
+    IdentityFile ~/.ssh/gto_tunnel_ed25519
+    ServerAliveInterval 30
+    ServerAliveCountMax 3
+    TCPKeepAlive yes
+    ExitOnForwardFailure yes
+```
+
+Test the alias:
+
+```bash
+ssh gto-public
+```
+
+Exit after the test:
+
+```bash
+exit
+```
+
+### 4. Create a systemd user service
+
+On the private high-performance server:
+
+```bash
+mkdir -p ~/.config/systemd/user
+vim ~/.config/systemd/user/gto-tunnel.service
+```
+
+Use this service definition:
+
+```ini
+[Unit]
+Description=GTO API reverse SSH tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment="AUTOSSH_GATETIME=0"
+ExecStart=/usr/bin/autossh -M 0 -N \
+  -R 127.0.0.1:9000:127.0.0.1:5000 \
+  gto-public
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+Start and enable it:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now gto-tunnel.service
+```
+
+Check status:
+
+```bash
+systemctl --user status gto-tunnel.service
+```
+
+Follow logs:
+
+```bash
+journalctl --user -u gto-tunnel.service -f
+```
+
+### 5. Keep the user service alive after logout
+
+Still on the private high-performance server, enable linger for the account that runs the tunnel:
+
+```bash
+sudo loginctl enable-linger PRIVATE_SERVER_USER
+```
+
+Replace `PRIVATE_SERVER_USER` with the output of:
+
+```bash
+whoami
+```
+
+This lets the user-level systemd service keep running after the SSH session logs out and after machine restarts.
+
+### 6. Verify the persistent tunnel
+
+On the public server:
+
+```bash
+curl http://127.0.0.1:9000/api/v1/gto-baseline/query
+```
+
+A `405 Method Not Allowed` response is acceptable for this check because the endpoint requires POST. It confirms that traffic reaches the Flask app through the tunnel.
+
+Then test the full public API path:
+
+```bash
+curl -X POST https://api.example.com/api/v1/gto-baseline/query \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer key_1" \
+  -d '{
+    "board": "Ah,As,Ks",
+    "path": [],
+    "hand": "QsJh",
+    "sample": false
+  }'
+```
+
+If the tunnel drops, `autossh` restarts the SSH process. If the private server reboots, the systemd user service starts the tunnel again after login lingering is enabled.
+
 ## Option 1: No Nginx, Expose Public IP and Port Directly
 
 This is the simplest option, but it exposes the SSH forwarded port directly to users.
@@ -325,4 +489,3 @@ This API key check happens inside the Flask app, so it works with all three depl
 - Use `autossh` or a `systemd` service for the tunnel.
 - Set generous proxy read timeouts because first-time turn or river realtime solving can take longer than normal HTTP requests.
 - For multi-instance private servers, use shared cache storage or route the same game/query stream to the same backend instance.
-
