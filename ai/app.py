@@ -1601,6 +1601,98 @@ def _sample_llm_decision(context: dict, ai_hand: str, strategy_context: dict, ll
     }
 
 
+def _parse_bool_request_field(data: dict, field_name: str, default: bool) -> bool:
+    value = data.get(field_name)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "off"}:
+            return False
+    raise ApiRouteError(400, {"error": f"Invalid boolean field: {field_name}"})
+
+
+def _get_gto_baseline_api_keys() -> set[str]:
+    raw_keys = os.getenv("GTO_BASELINE_API_KEYS", "")
+    return {key.strip() for key in raw_keys.split(",") if key.strip()}
+
+
+def _extract_gto_baseline_request_key() -> str:
+    header_key = request.headers.get("X-API-Key", "").strip()
+    if header_key:
+        return header_key
+
+    auth_header = request.headers.get("Authorization", "").strip()
+    if auth_header.lower().startswith("bearer "):
+        return auth_header[7:].strip()
+    return ""
+
+
+def _is_gto_baseline_request_authorized() -> bool:
+    configured_keys = _get_gto_baseline_api_keys()
+    if not configured_keys:
+        return True
+    request_key = _extract_gto_baseline_request_key()
+    return bool(request_key) and request_key in configured_keys
+
+
+def _build_gto_baseline_response(
+    context: dict,
+    ai_hand: str,
+    strategy_context: dict,
+    *,
+    sample: bool,
+) -> dict:
+    fallback_response = strategy_context.get("fallback_response")
+    baseline_available = fallback_response is None
+
+    if sample:
+        decision_payload = _sample_baseline_decision(context, ai_hand, strategy_context)
+        sampled_action = decision_payload.get("action")
+        decision_source = decision_payload.get("decision_source")
+        decision_detail = decision_payload.get("decision_detail")
+        strategy_hand_used = decision_payload.get("strategy_hand_used")
+        strategy = decision_payload.get("strategy", {})
+    elif fallback_response:
+        sampled_action = None
+        decision_source = fallback_response.get("decision_source")
+        decision_detail = fallback_response.get("decision_detail")
+        strategy_hand_used = fallback_response.get("strategy_hand_used")
+        strategy = fallback_response.get("strategy", {})
+    else:
+        sampled_action = None
+        decision_source = strategy_context.get("decision_source")
+        decision_detail = strategy_context.get("decision_detail")
+        strategy_hand_used = strategy_context.get("strategy_hand_used")
+        strategy = strategy_context.get("strategy", {})
+
+    return {
+        "status": "ok",
+        "baseline_available": baseline_available,
+        "sampled": sample,
+        "sampled_action": sampled_action,
+        "action": sampled_action,
+        "actions": strategy_context.get("actions", []),
+        "strategy": strategy,
+        "evs": strategy_context.get("hand_ev_dict", {}),
+        "decision_source": decision_source,
+        "decision_detail": decision_detail,
+        "strategy_hand_used": strategy_hand_used,
+        "node_type": context.get("node_type"),
+        "board": context.get("board_str"),
+        "actual_flop_board": context.get("actual_flop_board"),
+        "canonical_flop_board": context.get("canonical_flop_board"),
+        "actual_path": context.get("actual_path_str"),
+        "query_path": context.get("query_path_str"),
+        "pot": context.get("pot"),
+        "remaining_stack": context.get("final_remaining_stack"),
+    }
+
+
 @app.route("/api/action", methods=["POST"])
 def get_action():
     data = request.json or {}
@@ -1647,6 +1739,47 @@ def get_action():
 
         strategy_context = _resolve_strategy_context(context, ai_hand)
         return jsonify(_sample_baseline_decision(context, ai_hand, strategy_context)), 200
+
+    except ApiRouteError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/v1/gto-baseline/query", methods=["POST"])
+def query_gto_baseline():
+    if not _is_gto_baseline_request_authorized():
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.json or {}
+    try:
+        sample = _parse_bool_request_field(data, "sample", True)
+        context = _prepare_query_context(data)
+        ai_hand = context["ai_hand"]
+
+        if not ai_hand:
+            raise ApiRouteError(400, {"error": "Missing hand"})
+        if not context["current_node"] or context["node_type"] != "action_node":
+            raise ApiRouteError(
+                404,
+                {
+                    "error": "Path did not resolve to a GTO action node",
+                    "node_type": context["node_type"],
+                    "actual_path": context["actual_path_str"],
+                    "query_path": context["query_path_str"],
+                },
+            )
+
+        strategy_context = _resolve_strategy_context(context, ai_hand)
+        return jsonify(
+            _build_gto_baseline_response(
+                context,
+                ai_hand,
+                strategy_context,
+                sample=sample,
+            )
+        ), 200
 
     except ApiRouteError as exc:
         return jsonify(exc.payload), exc.status_code

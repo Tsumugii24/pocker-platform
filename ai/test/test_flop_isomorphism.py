@@ -139,6 +139,89 @@ class FlopIsomorphismTests(unittest.TestCase):
         self.assertEqual(payload["strategy_hand_used"], actual_hand)
         self.assertEqual(payload["strategy"], {"CHECK": 1.0})
 
+    def test_gto_baseline_query_can_return_distribution_without_sampling(self) -> None:
+        actual_flop = ("Ah", "As", "Ks")
+        mapping = solve_flop_isomorphism(actual_flop)
+        actual_hand = map_hand_canonical_to_actual("QcJd", mapping)
+        canonical_board = mapping.canonical_flop
+
+        fake_tree = {
+            "node_type": "action_node",
+            "player": 1,
+            "actions": ["CHECK", "BET 5"],
+            "strategy": {
+                "strategy": {
+                    "QcJd": [0.25, 0.75],
+                }
+            },
+            "evs": {"evs": {"QcJd": [0.1, 0.6]}},
+            "ranges": {
+                "ip_range": {"QcJd": 1.0},
+                "oop_range": {},
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cache_dir = Path(tmp_dir)
+            (cache_dir / f"{canonical_board}.parquet").write_text("", encoding="utf-8")
+
+            with (
+                patch.object(ai_app, "_get_dataset_cache_dir", return_value=cache_dir),
+                patch.object(ai_app, "_get_legacy_dataset_cache_dir", return_value=cache_dir),
+                patch.object(ai_app, "_get_loaded_game_data", return_value=fake_tree),
+                patch.object(
+                    ai_app,
+                    "_get_parsed_config_data",
+                    return_value=(
+                        {"board": ",".join(mapping.canonical_ordered_flop_cards)},
+                        {"QcJd": 1.0},
+                        {},
+                        5.0,
+                        100.0,
+                    ),
+                ),
+                patch.object(ai_app, "_resolve_config_path", return_value="dummy_config.txt"),
+                patch.object(query_action_line, "ActionLineQuery", FakeActionLineQuery),
+            ):
+                client = ai_app.app.test_client()
+                response = client.post(
+                    "/api/v1/gto-baseline/query",
+                    json={
+                        "board": ",".join(actual_flop),
+                        "path": [],
+                        "hand": actual_hand,
+                        "sample": False,
+                    },
+                )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["baseline_available"], True)
+        self.assertEqual(payload["sampled_action"], None)
+        self.assertEqual(payload["actions"], ["CHECK", "BET 5"])
+        self.assertEqual(payload["strategy"], {"CHECK": 0.25, "BET 5": 0.75})
+        self.assertEqual(payload["evs"], {"CHECK": 0.1, "BET 5": 0.6})
+        self.assertEqual(payload["decision_source"], "gto_exact")
+        self.assertEqual(payload["strategy_hand_used"], actual_hand)
+        self.assertEqual(payload["actual_path"], "ROOT -> (empty)")
+        self.assertEqual(payload["query_path"], "ROOT -> (empty)")
+
+    def test_gto_baseline_query_rejects_missing_api_key_when_configured(self) -> None:
+        with patch.dict(ai_app.os.environ, {"GTO_BASELINE_API_KEYS": "public-test-key"}):
+            client = ai_app.app.test_client()
+            response = client.post(
+                "/api/v1/gto-baseline/query",
+                json={
+                    "board": "Ah,As,Ks",
+                    "path": [],
+                    "hand": "QcJd",
+                },
+            )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json()["error"], "Unauthorized")
+
     def test_turn_and_river_config_exports_use_actual_board_and_ranges(self) -> None:
         class DummyQuerier:
             def __init__(self, board: str, actual_board: str):
