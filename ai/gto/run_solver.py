@@ -19,7 +19,21 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent.resolve()
 IS_WINDOWS = sys.platform == "win32"
 IS_DARWIN = sys.platform == "darwin"
-SOLVER_EXE = str(SCRIPT_DIR / "solver" / ("console_solver.exe" if IS_WINDOWS else "console_solver"))
+
+
+def _resolve_solver_executable(script_dir: Path = SCRIPT_DIR, platform: str = sys.platform) -> str:
+    """Return the solver binary path for the current platform."""
+    solver_dir = script_dir / "solver"
+    if platform == "win32":
+        return str(solver_dir / "console_solver.exe")
+    if platform.startswith("linux"):
+        linux_solver = solver_dir / "console_solver_linux"
+        if linux_solver.exists():
+            return str(linux_solver)
+    return str(solver_dir / "console_solver")
+
+
+SOLVER_EXE = _resolve_solver_executable()
 RESOURCE_DIR = str(SCRIPT_DIR / "solver")
 CONFIG_DIR = "configs"
 RESULTS_DIR = "cache/results"
