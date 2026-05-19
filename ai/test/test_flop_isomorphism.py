@@ -182,6 +182,7 @@ class FlopIsomorphismTests(unittest.TestCase):
                 ),
                 patch.object(ai_app, "_resolve_config_path", return_value="dummy_config.txt"),
                 patch.object(query_action_line, "ActionLineQuery", FakeActionLineQuery),
+                patch.dict(ai_app.os.environ, {"GTO_BASELINE_API_KEYS": ""}),
             ):
                 client = ai_app.app.test_client()
                 response = client.post(
